@@ -1,0 +1,191 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, "SF Mono", Menlo, monospace;
+  --font-heading: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+
+:root {
+  /* Origin: warm near-black, warm off-white, greys. Colour lives only in the light of the shader. */
+  --background: #0b0b0a;
+  --foreground: #f2f1ee;
+  --card: #121211;
+  --card-foreground: #f2f1ee;
+  --popover: #151514;
+  --popover-foreground: #f2f1ee;
+  --primary: #f2f1ee;
+  --primary-foreground: #0b0b0a;
+  --secondary: #1a1a19;
+  --secondary-foreground: #f2f1ee;
+  --muted: #1a1a19;
+  --muted-foreground: #9c9a94;
+  --accent: #1e1e1c;
+  --accent-foreground: #f2f1ee;
+  --destructive: #e8806f;
+  --border: rgba(255, 255, 250, 0.08);
+  --input: rgba(255, 255, 250, 0.14);
+  --ring: rgba(242, 241, 238, 0.6);
+  --radius: 0.875rem;
+
+  --ink-3: #64625d;
+  /* Kept for the developer diagnostics panel only. */
+  --signal: #e9a26b;
+  --signal-soft: rgba(233, 162, 107, 0.14);
+  --ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@theme inline {
+  --color-ink-3: var(--ink-3);
+  --color-signal: var(--signal);
+  --color-signal-soft: var(--signal-soft);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    @apply font-sans;
+    color-scheme: dark;
+    background: var(--background);
+  }
+  body {
+    @apply bg-background text-foreground;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "ss01", "cv11";
+    overflow-x: hidden;
+  }
+  ::selection {
+    background: rgba(242, 241, 238, 0.22);
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 3px;
+  }
+  html,
+  body {
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior-y: none;
+  }
+}
+
+@layer utilities {
+  .num {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum", "ss01";
+  }
+  /* One type scale, phone first. */
+  .t-hero {
+    /* 390px phone: "Move your photos." holds one line. */
+    font-size: clamp(2.25rem, 9.6vw, 4.25rem);
+    line-height: 1;
+    letter-spacing: -0.045em;
+    font-weight: 600;
+  }
+  .t-title {
+    font-size: clamp(2rem, 8.5vw, 2.75rem);
+    line-height: 1.04;
+    letter-spacing: -0.038em;
+    font-weight: 600;
+    text-wrap: balance;
+  }
+  .t-figure {
+    font-size: clamp(4.5rem, 26vw, 7.5rem);
+    line-height: 0.9;
+    letter-spacing: -0.06em;
+    font-weight: 500;
+    /* Proportional digits at display size: the tabular "1" carries a slab foot. */
+    font-variant-numeric: proportional-nums;
+    font-feature-settings: "pnum";
+  }
+  .t-lede {
+    font-size: 1.0625rem;
+    line-height: 1.5;
+    color: var(--muted-foreground);
+    text-wrap: pretty;
+  }
+  .t-meta {
+    font-size: 0.9375rem;
+    line-height: 1.45;
+    color: var(--muted-foreground);
+  }
+  .t-small {
+    font-size: 0.8125rem;
+    line-height: 1.45;
+    color: var(--ink-3);
+  }
+  .stage-in {
+    animation: stage-in 460ms var(--ease-out) both;
+  }
+}
+
+@keyframes stage-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes ellipsis {
+  0%, 20% { opacity: 0.2; }
+  50% { opacity: 1; }
+  100% { opacity: 0.2; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}
