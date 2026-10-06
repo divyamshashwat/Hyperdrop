@@ -477,6 +477,7 @@ export class TransferSession {
       if (wasReconnect) this.reconnects++;
       this.clearLoss();
       if (this.connectTimer) clearTimeout(this.connectTimer);
+      if (this.signaling) this.signaling.pollMs = 2000; // only bye / peer-left matter now
       this.ev.dispatch({ type: "CONNECTED", label: this.peerLabel, route: this.route?.route ?? null });
       this.sender?.attach(this.link);
       this.receiver?.attach(this.link);
@@ -639,7 +640,7 @@ export class TransferSession {
       code: "connection-failed",
       detail:
         `${reason} · this device: ${fmt(c.local)} · other device: ${fmt(c.remote)}` +
-        ` · signals in: ${fmt(this.sigIn)} · stream ${this.sigStream}, ready ${this.sigReady}` +
+        ` · signals in: ${fmt(this.sigIn)} · ${this.signaling?.mode ?? "no"} ${this.sigStream}, ready ${this.sigReady}` +
         ` · posts failed: ${this.signaling?.failedPosts ?? 0}`,
       hint,
     });

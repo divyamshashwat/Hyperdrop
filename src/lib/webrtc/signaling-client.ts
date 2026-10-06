@@ -12,9 +12,16 @@ export interface SignalingHandlers {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** If the event stream hasn't said "ready" by now, fetch messages by polling instead. */
+const STREAM_GRACE_MS = 4000;
+
 /**
  * Signaling transport: server-sent events down, ordered POSTs up. It only ever
  * carries SDP / ICE blobs. (Swappable for a WebSocket without touching callers.)
+ *
+ * Some paths never deliver a streamed response (seen with iOS Safari through a
+ * tunnel): headers simply never arrive. If the stream isn't ready within a few
+ * seconds the downlink switches, for good, to short polling over plain POSTs.
  */
 export class SignalingClient {
   private closed = false;
@@ -23,6 +30,14 @@ export class SignalingClient {
   private queue: Promise<void> = Promise.resolve();
   /** Messages that never reached the server (diagnostics). */
   failedPosts = 0;
+  /** "stream" or "poll": how messages are reaching this device (diagnostics). */
+  mode: "stream" | "poll" = "stream";
+  private ready = false;
+  /** The current stream attempt has delivered "ready" (headers alone don't count: the body can be held too). */
+  private streamReady = false;
+  private graceTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Poll quickly while connecting; the UI can slow it down once the peer link is up. */
+  pollMs = 700;
 
   constructor(
     private roomId: string,
@@ -32,6 +47,58 @@ export class SignalingClient {
 
   connect() {
     void this.loop();
+  }
+
+  /** Every stream attempt gets a few seconds to say "ready"; otherwise the downlink switches to polling. */
+  private armGrace() {
+    this.streamReady = false;
+    if (this.graceTimer) clearTimeout(this.graceTimer);
+    this.graceTimer = setTimeout(() => {
+      if (!this.streamReady && !this.closed && !this.terminal) this.startPolling();
+    }, STREAM_GRACE_MS);
+  }
+
+  /** A method, not an inline check: the mode changes underneath awaits. */
+  private polling() {
+    return this.mode === "poll";
+  }
+
+  private startPolling() {
+    if (this.mode === "poll") return;
+    this.mode = "poll";
+    this.ctrl?.abort();
+    void this.pollLoop();
+  }
+
+  private async pollLoop() {
+    let failures = 0;
+    while (!this.closed && !this.terminal) {
+      try {
+        const res = await fetch(`/api/session/${this.roomId}/poll`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${this.token}` },
+          cache: "no-store",
+        });
+        if (res.status === 401 || res.status === 404 || res.status === 410) return this.expire();
+        if (!res.ok) throw new Error(String(res.status));
+        const { events } = (await res.json()) as { events: Array<{ event: string; data: Record<string, unknown> }> };
+        if (failures > 0 || !this.ready) this.h.onStream("open");
+        failures = 0;
+        if (!this.ready) {
+          this.ready = true;
+          this.h.onReady(null);
+        }
+        for (const e of events) this.handle(e.event, e.data ?? {});
+      } catch {
+        if (this.closed) return;
+        if (++failures > 12) {
+          this.h.onStream("lost");
+          return;
+        }
+        this.h.onStream("reconnecting");
+      }
+      await sleep(this.pollMs);
+    }
   }
 
   /** Messages are POSTed strictly in order so offer → candidates never reorder. */
@@ -44,6 +111,7 @@ export class SignalingClient {
   leave() {
     if (this.closed) return;
     this.closed = true;
+    if (this.graceTimer) clearTimeout(this.graceTimer);
     this.ctrl?.abort();
     const url = `/api/session/${this.roomId}/leave`;
     const body = JSON.stringify({ token: this.token });
@@ -58,6 +126,7 @@ export class SignalingClient {
 
   close() {
     this.closed = true;
+    if (this.graceTimer) clearTimeout(this.graceTimer);
     this.ctrl?.abort();
   }
 
@@ -95,8 +164,9 @@ export class SignalingClient {
 
   private async loop() {
     let attempt = 0;
-    while (!this.closed && !this.terminal) {
+    while (!this.closed && !this.terminal && !this.polling()) {
       try {
+        this.armGrace();
         this.ctrl = new AbortController();
         const res = await fetch(`/api/session/${this.roomId}/events`, {
           headers: { Authorization: `Bearer ${this.token}` },
@@ -109,9 +179,9 @@ export class SignalingClient {
         this.h.onStream("open");
         await this.read(res.body);
       } catch {
-        if (this.closed) return;
+        if (this.closed || this.polling()) return;
       }
-      if (this.closed || this.terminal) return;
+      if (this.closed || this.terminal || this.polling()) return;
       if (++attempt > 8) {
         this.h.onStream("lost");
         return;
@@ -151,8 +221,14 @@ export class SignalingClient {
     } catch {
       return;
     }
+    this.handle(event, payload);
+  }
+
+  private handle(event: string, payload: Record<string, unknown>) {
     switch (event) {
       case "ready":
+        this.ready = this.streamReady = true;
+        if (this.graceTimer) clearTimeout(this.graceTimer);
         this.h.onReady((payload.peer as string | null) ?? null);
         break;
       case "peer-joined":

@@ -26,6 +26,8 @@ interface Room {
   guestSeenAt: number;
   conns: Partial<Record<Role, Conn>>;
   pending: Record<Role, Array<{ event: string; data: unknown }>>;
+  /** A role whose event stream never opened (a proxy or Safari holding it) fetches its messages by polling. */
+  polling: Record<Role, boolean>;
   signalCount: number;
   /** Current Nearby token (8 hex chars = 32 bits), if one is being broadcast. */
   nearby: { token: string; expiresAt: number } | null;
@@ -108,6 +110,7 @@ export class RoomStore {
       guestSeenAt: t,
       conns: {},
       pending: { host: [], guest: [] },
+      polling: { host: false, guest: false },
       signalCount: 0,
       nearby: null,
     };
@@ -185,6 +188,7 @@ export class RoomStore {
   attach(roomId: string, role: Role, conn: Conn): boolean {
     const room = this.rooms.get(roomId);
     if (!room) return false;
+    if (room.polling[role]) return false; // a stream that shows up late would swallow messages the poller expects
     room.conns[role]?.close();
     room.conns[role] = conn;
     slog(roomId, `${role} stream attached, flushing ${room.pending[role].length} queued`);
@@ -208,6 +212,27 @@ export class RoomStore {
     }
   }
 
+  /**
+   * Polling fallback: hand over everything queued for `role`. From the first poll on, that role
+   * is served by polling only, so any (stuck) stream it had is dropped and new ones are refused.
+   */
+  poll(roomId: string, role: Role): Array<{ event: string; data: unknown }> | null {
+    const room = this.rooms.get(roomId);
+    if (!room) return null;
+    if (!room.polling[role]) {
+      room.polling[role] = true;
+      slog(roomId, `${role} switched to polling`);
+      const stuck = room.conns[role];
+      delete room.conns[role];
+      stuck?.close();
+    }
+    room.lastActivity = this.now();
+    if (role === "guest") room.guestSeenAt = this.now();
+    const out = room.pending[role].splice(0);
+    if (out.length) slog(roomId, `${role} polled ${out.length}`);
+    return out;
+  }
+
   relay(roomId: string, from: Role, kind: SignalKind, data: unknown): boolean {
     const room = this.rooms.get(roomId);
     if (!room) return false;
@@ -229,6 +254,7 @@ export class RoomStore {
     room.guestToken = null;
     room.labels.guest = "";
     room.pending.guest = [];
+    room.polling.guest = false;
     this.codes.set(room.code, room.id); // a new sender may pair again
     this.deliver(room, "host", "peer-left", {});
   }
@@ -264,7 +290,7 @@ export class RoomStore {
     }
     const q = room.pending[to];
     if (q.length < this.limits.maxPending) q.push({ event, data });
-    slog(room.id, `→ ${to} ${what} (queued, ${to} not connected)`);
+    slog(room.id, `→ ${to} ${what} (queued${room.polling[to] ? " for poll" : `, ${to} not connected`})`);
   }
 
   private destroy(room: Room, event: "expired" | "closed") {

@@ -33,7 +33,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
         },
         close: closeAll,
       };
-      controller.enqueue(enc.encode(": connected\n\n"));
+      // ~2 KB of comment first: some proxies and browsers hold a streamed response until they've seen enough bytes.
+      controller.enqueue(enc.encode(`: connected${" ".repeat(2048)}\n\n`));
       if (!store.attach(id, role, conn)) {
         closeAll();
         return;
