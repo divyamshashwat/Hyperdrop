@@ -161,4 +161,37 @@ describe("signaling rooms", () => {
     for (let i = 0; i < DEFAULT_LIMITS.maxSignals + 50; i++) if (store.relay(r.roomId, "host", "ice", {})) accepted++;
     expect(accepted).toBe(DEFAULT_LIMITS.maxSignals);
   });
+
+  it("numbers every message so a stalled stream can be backed up by polling", () => {
+    const { store, advance } = setup();
+    const r = store.create("Windows");
+    store.attach(r.roomId, "host", conn().c);
+    const joined = store.join({ roomId: r.roomId, secret: r.joinSecret }, "iPhone");
+    if (!joined.ok) throw new Error("join failed");
+    // the guest's stream is attached but stalled: whatever it is sent never reaches the device
+    const stalled = conn();
+    store.attach(r.roomId, "guest", stalled.c);
+    store.relay(r.roomId, "host", "answer", { sdp: "a" });
+    store.relay(r.roomId, "host", "ice", { c: 1 });
+    // polling still gets everything, numbered, and only what's new
+    expect(store.poll(r.roomId, "guest", 0)).toEqual([
+      { seq: 1, event: "signal", data: { kind: "answer", data: { sdp: "a" } } },
+      { seq: 2, event: "signal", data: { kind: "ice", data: { c: 1 } } },
+    ]);
+    expect(store.poll(r.roomId, "guest", 2)).toEqual([]);
+    // the stream carried the same numbers, so the client can de-duplicate
+    expect(stalled.events.filter((e) => e.event === "signal")).toHaveLength(2);
+    // a reattached stream replays the log; the client skips what it already handled
+    const fresh = conn();
+    store.attach(r.roomId, "guest", fresh.c);
+    expect(fresh.events.map((e) => e.event)).toEqual(["ready", "signal", "signal"]);
+    // polling counts as presence
+    advance(DEFAULT_LIMITS.guestAbsentMs - 1000);
+    store.detach(r.roomId, "guest", fresh.c);
+    store.poll(r.roomId, "guest", 2);
+    advance(DEFAULT_LIMITS.guestAbsentMs - 1000);
+    store.sweep();
+    expect(store.authenticate(r.roomId, joined.guestToken)).toBe("guest");
+    expect(store.poll("nope", "guest", 0)).toBeNull();
+  });
 });

@@ -92,7 +92,7 @@ export function NearbyDiagnostics() {
 
       {d.spectrum.length > 0 && (
         <div className="mt-2">
-          <div className="flex h-16 items-end gap-px" aria-label="Spectrum 18 to 24 kHz">
+          <div className="flex h-16 items-end gap-px" aria-label="Spectrum 1 to 6 kHz">
             {d.spectrum.map((b) => (
               <div
                 key={b.hz}

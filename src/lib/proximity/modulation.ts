@@ -1,34 +1,35 @@
 import { TONES } from "./protocol";
 
 /**
- * Frequency profiles, from hardware calibration (docs/NEARBY.md section 4).
+ * Frequency profile (docs/NEARBY.md section 4).
  *
- * First measured row, iPhone (iOS 18.5, Safari, 48 kHz) next to a Windows PC speaker:
- *   20.0 ✓  20.5 ✓ (strongest)  21.0 ✓  21.5 ✕  22.0 ✕
- * The original 48 kHz profile (20.5-22.0 kHz) put half its carriers above that
- * cut-off and could never decode, so it was removed. One profile now sits inside
- * the measured passband and also fits 44.1 kHz hardware. Re-measure on more phones
- * before widening it.
+ * Near-ultrasonic carriers (20-21 kHz) were tried first and did not pair in
+ * practice: laptop speakers and phone capture paths roll off too steeply up
+ * there. Nearby now uses an audible band that every speaker and microphone
+ * reproduces well, so the receiver plays a short, quiet chirp.
+ *
+ * Carriers sit in 2.4-4.2 kHz: above most speech and hum energy, below where
+ * small speakers start to fall off, and with no carrier at a harmonic of
+ * another (speaker distortion can't fake a symbol). 600 Hz spacing is many
+ * detector bins wide, so reverb and frequency error stay well separated.
  */
 export interface FrequencyProfile {
-  id: "ultrasonic-low";
+  id: "audible";
   /** Four tones, low to high. Symbol n is sent as tones[n]. */
   tones: readonly [number, number, number, number];
   /** Both ends need at least this sample rate for the top tone to be representable. */
   minSampleRate: number;
 }
 
-export const PROFILES: readonly FrequencyProfile[] = [
-  // 300 Hz spacing (2.25 detector bins at 48 kHz), all inside the measured 20.0-21.0 kHz passband.
-  { id: "ultrasonic-low", tones: [20150, 20450, 20750, 21050], minSampleRate: 44000 },
-];
+export const PROFILES: readonly FrequencyProfile[] = [{ id: "audible", tones: [2400, 3000, 3600, 4200], minSampleRate: 16000 }];
 
-export const SYMBOL_MS = 30;
-export const RAMP_MS = 4;
+/** Long enough that room echo of the previous symbol has mostly died down before the detector trusts the next. */
+export const SYMBOL_MS = 50;
+export const RAMP_MS = 6;
 /** Silence between repeated packets. */
-export const GAP_MS = 220;
-/** Conservative default output level (linear, 0..1). Lowest reliable level must come from testing. */
-export const DEFAULT_AMPLITUDE = 0.22;
+export const GAP_MS = 300;
+/** Conservative default output level (linear, 0..1). Audible, so keep it modest. */
+export const DEFAULT_AMPLITUDE = 0.18;
 
 /** The profile a transmitter should use, from the sample rate its audio output actually runs at. */
 export function chooseOutputProfile(sampleRate: number): FrequencyProfile | null {
@@ -46,7 +47,7 @@ export function symbolSamples(sampleRate: number): number {
 
 /**
  * Render symbols to PCM: one clean sine per symbol (never square or saw waves,
- * whose harmonics fold into audible range), each with a raised-cosine fade in
+ * whose harmonics would land on other carriers), each with a raised-cosine fade in
  * and out so there are no clicks or broadband transients.
  */
 export function renderSymbols(

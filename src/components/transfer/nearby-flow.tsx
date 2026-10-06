@@ -4,7 +4,7 @@ import type { NearbyUi } from "@/hooks/use-nearby";
 import { Dots, Lede, PrimaryButton, Screen, SecondaryButton, TextButton, Title } from "./ui";
 
 /**
- * The phone's Nearby screen. Users never see the word "ultrasonic", a waveform,
+ * The phone's Nearby screen. Users never see frequencies, a waveform,
  * a confidence number or a distance: only what is happening, in plain words.
  */
 export function NearbyView({ state, onRetry, onClose }: { state: NearbyUi; onRetry: () => void; onClose: () => void }) {
@@ -61,9 +61,7 @@ export function NearbyView({ state, onRetry, onClose }: { state: NearbyUi; onRet
       body:
         reason === "insecure"
           ? "Nearby needs a secure (https) page to use the microphone. Scan the QR code on the computer with your camera instead."
-          : reason === "filtered"
-            ? "This browser filters out the frequencies Nearby uses. Scan the QR code on the computer instead."
-            : "This browser can't hear the Nearby signal. Scan the QR code on the computer instead.",
+          : "This browser can't hear the Nearby signal. Scan the QR code on the computer instead.",
       retry: false,
     };
   }

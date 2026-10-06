@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { UltrasonicDecoder, type DecoderEvent } from "@/lib/proximity/decoder";
-import { PROFILES, chooseOutputProfile, profilesForCapture, renderSymbols, symbolSamples } from "@/lib/proximity/modulation";
+import { ToneDecoder, type DecoderEvent } from "@/lib/proximity/decoder";
+import { GAP_MS, PROFILES, chooseOutputProfile, profilesForCapture, renderSymbols, symbolSamples } from "@/lib/proximity/modulation";
 import {
   DATA_SYMBOLS,
   PACKET_SYMBOLS,
@@ -29,7 +29,7 @@ function gaussian(r: () => number) {
   return Math.sqrt(-2 * Math.log(r() + 1e-12)) * Math.cos(2 * Math.PI * r());
 }
 
-function run(decoder: UltrasonicDecoder, x: Float32Array, chunk = 1024): DecoderEvent[] {
+function run(decoder: ToneDecoder, x: Float32Array, chunk = 1024): DecoderEvent[] {
   const events: DecoderEvent[] = [];
   for (let i = 0; i < x.length; i += chunk) events.push(...decoder.push(x.subarray(i, Math.min(x.length, i + chunk))));
   return events;
@@ -99,30 +99,32 @@ describe("nearby protocol", () => {
 
 describe("frequency profiles", () => {
   it("are chosen from the real sample rate, never assumed", () => {
-    expect(chooseOutputProfile(48000)?.id).toBe("ultrasonic-low");
-    expect(chooseOutputProfile(44100)?.id).toBe("ultrasonic-low");
-    expect(chooseOutputProfile(16000)).toBeNull();
-    expect(profilesForCapture(44100).map((p) => p.id)).toEqual(["ultrasonic-low"]);
-    expect(profilesForCapture(48000).map((p) => p.id)).toEqual(["ultrasonic-low"]);
-    expect(profilesForCapture(16000)).toEqual([]);
+    expect(chooseOutputProfile(48000)?.id).toBe("audible");
+    expect(chooseOutputProfile(44100)?.id).toBe("audible");
+    expect(chooseOutputProfile(16000)?.id).toBe("audible");
+    expect(chooseOutputProfile(8000)).toBeNull();
+    expect(profilesForCapture(44100).map((p) => p.id)).toEqual(["audible"]);
+    expect(profilesForCapture(16000).map((p) => p.id)).toEqual(["audible"]);
+    expect(profilesForCapture(8000)).toEqual([]);
   });
 
-  it("stays inside the measured iPhone passband (20.0-21.0 kHz detected, 21.5 kHz not)", () => {
-    for (const p of PROFILES) for (const f of p.tones) expect(f).toBeLessThan(21_100);
-  });
-
-  it("keeps every carrier above 20 kHz and below Nyquist", () => {
+  it("keeps every carrier in the band small speakers and phone mics reproduce, below Nyquist", () => {
     for (const p of PROFILES) {
       for (const f of p.tones) {
-        expect(f).toBeGreaterThan(20000);
+        expect(f).toBeGreaterThanOrEqual(2000);
+        expect(f).toBeLessThanOrEqual(5000);
         expect(f).toBeLessThan(p.minSampleRate / 2);
       }
     }
   });
 
-  it("a packet lasts under 2.5 seconds", () => {
+  it("no carrier is a harmonic of another", () => {
+    for (const p of PROFILES) for (const a of p.tones) for (const b of p.tones) if (b > a) expect(b % a).not.toBe(0);
+  });
+
+  it("a packet lasts under 3.5 seconds", () => {
     const seconds = (symbolSamples(48000) * PACKET_SYMBOLS) / 48000;
-    expect(seconds).toBeLessThan(2.5);
+    expect(seconds).toBeLessThan(3.5);
     expect(seconds).toBeGreaterThan(1);
   });
 });
@@ -136,7 +138,7 @@ describe("streaming decoder", () => {
       const pcm = renderSymbols(encodePacket(PAYLOAD), profile, rate, 0.25);
       for (const seed of [1, 2, 3]) {
         const x = airPath(pcm, rate, { gain: 0.15, noise: 0.01, leadMs: 90 + seed * 37, seed });
-        const events = run(new UltrasonicDecoder(profile, rate), x);
+        const events = run(new ToneDecoder(profile, rate), x);
         const packet = events.find((e) => e.type === "packet");
         expect(packet && packet.type === "packet" && packet.packet.payload.token).toBe(PAYLOAD.token);
       }
@@ -152,11 +154,26 @@ describe("streaming decoder", () => {
     const n = symbolSamples(rate);
     const at = Math.round((rate * 137) / 1000) + (PREAMBLE.length + SYNC.length + 20) * n;
     for (let i = 0; i < 3 * n; i++) x[at + i] += 0.08 * Math.sin((2 * Math.PI * profile.tones[2] * i) / rate);
-    const ok = run(new UltrasonicDecoder(profile, rate), x).find((e) => e.type === "packet");
+    const ok = run(new ToneDecoder(profile, rate), x).find((e) => e.type === "packet");
     expect(ok).toBeTruthy();
   });
 
-  it("never pairs on noise, speech-band content, sweeps or a steady ultrasonic tone", () => {
+  it("decodes through room echo (reverb tail longer than a symbol)", () => {
+    const rate = 48000;
+    const profile = PROFILES[0];
+    const dry = renderSymbols(encodePacket(PAYLOAD), profile, rate, 0.25);
+    const wet = new Float32Array(dry.length + rate / 2);
+    // direct path plus a few decaying reflections out to 120 ms
+    for (const [ms, g] of [[0, 1], [7, 0.55], [19, 0.4], [41, 0.3], [73, 0.2], [120, 0.12]] as const) {
+      const d = Math.round((rate * ms) / 1000);
+      for (let i = 0; i < dry.length; i++) wet[i + d] += dry[i] * g;
+    }
+    const events = run(new ToneDecoder(profile, rate), airPath(wet, rate, { gain: 0.15 }));
+    const packet = events.find((e) => e.type === "packet");
+    expect(packet && packet.type === "packet" && packet.packet.payload.token).toBe(PAYLOAD.token);
+  });
+
+  it("never pairs on noise, speech, music-like chords, sweeps or a steady tone in the band", () => {
     const rate = 48000;
     const r = rng(42);
     const seconds = 12;
@@ -166,11 +183,12 @@ describe("streaming decoder", () => {
       x[i] =
         0.05 * gaussian(r) + // broadband noise / fan
         0.2 * Math.sin(2 * Math.PI * (300 + 200 * Math.sin(t * 3)) * t) + // speech-ish formant motion
-        0.05 * Math.sin(2 * Math.PI * (18000 + 600 * t) * t) + // a slow sweep through the band
-        (t > 6 && t < 9 ? 0.15 * Math.sin(2 * Math.PI * 21000 * t) : 0); // a steady 21 kHz whine
+        0.05 * Math.sin(2 * Math.PI * (2000 + 150 * t) * t) + // a slow sweep through the band
+        (t < 4 ? 0.08 * (Math.sin(2 * Math.PI * 2640 * t) + Math.sin(2 * Math.PI * 3300 * t) + Math.sin(2 * Math.PI * 3960 * t)) : 0) + // a held chord
+        (t > 6 && t < 9 ? 0.15 * Math.sin(2 * Math.PI * 3000 * t) : 0); // a steady 3 kHz beep
     }
     for (const profile of PROFILES) {
-      const events = run(new UltrasonicDecoder(profile, rate), x);
+      const events = run(new ToneDecoder(profile, rate), x);
       expect(events.filter((e) => e.type === "packet")).toHaveLength(0);
     }
   });
@@ -178,11 +196,11 @@ describe("streaming decoder", () => {
   it("decodes a repeated packet once per transmission and ignores the gap", () => {
     const rate = 48000;
     const profile = PROFILES[0];
-    const one = renderSymbols(encodePacket(PAYLOAD), profile, rate, 0.25, 220);
+    const one = renderSymbols(encodePacket(PAYLOAD), profile, rate, 0.25, GAP_MS);
     const twice = new Float32Array(one.length * 2);
     twice.set(one);
     twice.set(one, one.length);
-    const events = run(new UltrasonicDecoder(profile, rate), airPath(twice, rate));
+    const events = run(new ToneDecoder(profile, rate), airPath(twice, rate));
     expect(events.filter((e) => e.type === "packet")).toHaveLength(2);
   });
 });

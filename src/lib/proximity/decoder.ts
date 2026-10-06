@@ -19,6 +19,9 @@ const PROBE_OFFSETS = [-70, 0, 70];
 /** Preamble gate: winning tone must beat the others by ~5 dB and the noise floor by ~8 dB. */
 const PREAMBLE_CONTRAST = 3.2;
 const PREAMBLE_OVER_NOISE = 6;
+/** Noise-floor tracker step per hop when the band gets quieter / louder. */
+const NOISE_FALL = 0.03;
+const NOISE_RISE = 0.0015;
 
 export type DecoderEvent =
   | { type: "signal"; confidence: number }
@@ -52,7 +55,7 @@ function goertzel(x: Float32Array, start: number, n: number, coeff: number): num
 
 const dB = (p: number) => 10 * Math.log10(Math.max(p, 1e-14));
 
-export class UltrasonicDecoder {
+export class ToneDecoder {
   readonly hop: number;
   private coeffs: number[][];
   private pending: Float32Array;
@@ -110,8 +113,13 @@ export class UltrasonicDecoder {
 
     const sym = this.symbolAt(h);
     const others = (sym.sum - sym.energy) / (TONES - 1);
-    // Track the band's noise floor only while nothing is being decoded (the preamble re-calibrates it).
-    if (this.lockedAt === null && !this.lockCandidate) this.noise = this.noise * 0.97 + Math.max(others, 1e-14) * 0.03;
+    // Track the band's noise floor only while nothing is being decoded. It falls fast but rises slowly
+    // (~10 s), so room echo of our own packet can't inflate it before the preamble has been recognised.
+    if (this.lockedAt === null && !this.lockCandidate) {
+      const o = Math.max(others, 1e-14);
+      if (h === HOPS_PER_SYMBOL) this.noise = o; // first full window seeds it
+      else this.noise += (o - this.noise) * (o < this.noise ? NOISE_FALL : NOISE_RISE);
+    }
     this.stats.toneDb = sym.levels.map(dB);
     this.stats.noiseDb = dB(this.noise);
     this.stats.snrDb = dB(sym.energy) - dB(this.noise);

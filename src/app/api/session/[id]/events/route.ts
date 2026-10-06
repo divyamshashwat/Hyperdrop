@@ -26,14 +26,16 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
         } catch {}
       };
       conn = {
-        send: (event, data) => {
+        send: (event, data, seq) => {
           try {
-            controller.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+            const id = seq ? `id: ${seq}\n` : "";
+            controller.enqueue(enc.encode(`${id}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
           } catch {}
         },
         close: closeAll,
       };
-      controller.enqueue(enc.encode(": connected\n\n"));
+      // ~2 KB of comment first: some proxies and browsers hold a streamed response until they've seen enough bytes.
+      controller.enqueue(enc.encode(`: connected${" ".repeat(2048)}\n\n`));
       if (!store.attach(id, role, conn)) {
         closeAll();
         return;

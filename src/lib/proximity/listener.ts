@@ -1,4 +1,4 @@
-import { UltrasonicDecoder, bandLevel, toDb } from "./decoder";
+import { ToneDecoder, bandLevel, toDb } from "./decoder";
 import { debugEnabled, nearbyDebug, resetNearbyDebug } from "./debug-store";
 import { profilesForCapture } from "./modulation";
 import { tokenToHex } from "./protocol";
@@ -16,40 +16,36 @@ export type NearbyStatus =
   | "timeout"
   | "error";
 
-export type UnsupportedReason = "insecure" | "no-audio" | "sample-rate" | "filtered";
+export type UnsupportedReason = "insecure" | "no-audio" | "sample-rate";
 
 export interface NearbyState {
   status: NearbyStatus;
   reason?: UnsupportedReason;
-  /** True when the capture device looks like Bluetooth/headphones (often strips high frequencies). */
+  /** True when the capture device looks like Bluetooth/headphones (narrowband, and far from the speaker). */
   externalMic?: boolean;
 }
 
-const LISTEN_TIMEOUT_MS = 20_000;
+const LISTEN_TIMEOUT_MS = 25_000;
 const START_WATCHDOG_MS = 15_000;
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([p, new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), ms))]);
 }
-const CAPABILITY_WINDOW_S = 0.4;
 
 /**
  * The phone's ear. Asks for the microphone only when the user taps, measures
- * what the hardware actually delivers, refuses (honestly) when the ultrasonic
- * band can't be heard, decodes locally, and switches the microphone off the
+ * what the hardware actually delivers, refuses (honestly) when the carrier
+ * band can't be represented, decodes locally, and switches the microphone off the
  * moment the server confirms the token. Audio never leaves the device.
  */
 export class NearbyListener {
   private stream: MediaStream | null = null;
   private ctx: AudioContext | null = null;
   private nodes: AudioNode[] = [];
-  private decoders: UltrasonicDecoder[] = [];
+  private decoders: ToneDecoder[] = [];
   private timeout: ReturnType<typeof setTimeout> | null = null;
   private watchdog: ReturnType<typeof setTimeout> | null = null;
   private statsTimer: ReturnType<typeof setInterval> | null = null;
-  private probe: Float32Array[] = [];
-  private probeLen = 0;
-  private checked = false;
   private busy = false;
   private stopped = false;
   private last: Float32Array = new Float32Array(0);
@@ -126,7 +122,7 @@ export class NearbyListener {
       nearbyDebug.capability = `capture rate ${rate} Hz is too low`;
       return this.finish({ status: "unsupported", reason: "sample-rate", externalMic });
     }
-    this.decoders = profiles.map((p) => new UltrasonicDecoder(p, rate));
+    this.decoders = profiles.map((p) => new ToneDecoder(p, rate));
 
     const source = this.ctx.createMediaStreamSource(this.stream);
     const sink = this.ctx.createGain();
@@ -168,7 +164,6 @@ export class NearbyListener {
   private feed(chunk: Float32Array) {
     if (this.stopped || !this.ctx) return;
     this.last = chunk;
-    if (!this.checked) this.capabilityProbe(chunk);
     if (this.busy) return; // a token is being validated; don't stack requests
     for (const d of this.decoders) {
       for (const ev of d.push(chunk)) {
@@ -188,34 +183,6 @@ export class NearbyListener {
           return;
         }
       }
-    }
-  }
-
-  /**
-   * Before trusting "Listening…", check the high band isn't simply cut off by the
-   * capture path (some processing low-passes around 16-20 kHz). If audible-band
-   * sound is present but the carrier band is digital silence, Nearby can't work here.
-   */
-  private capabilityProbe(chunk: Float32Array) {
-    this.probe.push(chunk);
-    this.probeLen += chunk.length;
-    if (!this.ctx || this.probeLen < this.ctx.sampleRate * CAPABILITY_WINDOW_S) return;
-    this.checked = true;
-    const all = new Float32Array(this.probeLen);
-    let o = 0;
-    for (const c of this.probe) {
-      all.set(c, o);
-      o += c.length;
-    }
-    this.probe = [];
-    const rate = this.ctx.sampleRate;
-    const tones = this.decoders.flatMap((d) => [...d.profile.tones]);
-    const high = bandLevel(all, rate, tones);
-    const low = bandLevel(all, rate, [500, 1000, 2000, 4000]);
-    nearbyDebug.capability = `band ${toDb(high).toFixed(0)} dB vs audible ${toDb(low).toFixed(0)} dB`;
-    if (low > 1e-8 && high < 1e-13) {
-      nearbyDebug.capability += " → high band filtered";
-      this.finish({ status: "unsupported", reason: "filtered" });
     }
   }
 
@@ -259,7 +226,7 @@ export class NearbyListener {
     nearbyDebug.decoders = this.decoders.map((d) => ({ ...d.getStats() }));
     const rate = this.ctx?.sampleRate ?? 48000;
     const spectrum: Array<{ hz: number; db: number }> = [];
-    for (let hz = 18000; hz <= Math.min(23750, rate / 2 - 250); hz += 250) {
+    for (let hz = 1000; hz <= Math.min(6000, rate / 2 - 250); hz += 200) {
       spectrum.push({ hz, db: toDb(bandLevel(this.last, rate, [hz])) });
     }
     nearbyDebug.spectrum = spectrum;
@@ -286,7 +253,6 @@ export class NearbyListener {
     if (this.ctx) void this.ctx.close().catch(() => {});
     this.ctx = null;
     this.decoders = [];
-    this.probe = [];
     this.last = new Float32Array(0);
   }
 }
