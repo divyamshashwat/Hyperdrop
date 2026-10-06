@@ -11,6 +11,8 @@ export interface PeerOptions {
   onChannel(ch: RTCDataChannel): void;
   onState(s: PcState): void;
   onRoute(r: RouteInfo | null): void;
+  /** Candidate gathering for the current generation finished; reports what this side offered. */
+  onGathered?(local: CandidateTally): void;
 }
 
 interface Envelope {
@@ -52,6 +54,7 @@ export class PeerConnectionManager {
   private route: RouteInfo | null = null;
   private closed = false;
   private localTally: CandidateTally = {};
+  private gatherTimer: ReturnType<typeof setTimeout> | null = null;
   /** Keyed by generation: the answerer can hear candidates before the offer that opens their generation. */
   private remoteTally = new Map<number, CandidateTally>();
 
@@ -147,6 +150,8 @@ export class PeerConnectionManager {
   private teardown() {
     const pc = this.pc;
     this.pc = null;
+    if (this.gatherTimer) clearTimeout(this.gatherTimer);
+    this.gatherTimer = null;
     this.channel = null;
     this.remoteSet = false;
     if (pc) {
@@ -163,15 +168,24 @@ export class PeerConnectionManager {
     this.teardown();
     this.route = null;
     this.localTally = {};
+    // Report once per generation: when gathering completes, or after 3 s (an unreachable STUN server can stall it).
+    let reported = false;
+    const report = () => {
+      if (reported || pc !== this.pc) return;
+      reported = true;
+      this.o.onGathered?.({ ...this.localTally });
+    };
     for (const g of this.remoteTally.keys()) if (g < this.gen) this.remoteTally.delete(g);
     const gen = this.gen;
     const pc = new RTCPeerConnection({ iceServers: this.o.iceServers, bundlePolicy: "max-bundle" });
     this.pc = pc;
+    this.gatherTimer = setTimeout(report, 3000);
     pc.onicecandidate = (e) => {
       if (e.candidate?.candidate) {
         const t = candidateType(e.candidate.candidate);
         this.localTally[t] = (this.localTally[t] ?? 0) + 1;
       }
+      if (!e.candidate && pc === this.pc) report();
       if (e.candidate) this.o.signal("ice", { gen, candidate: e.candidate.toJSON() } satisfies Envelope);
     };
     pc.oniceconnectionstatechange = () => {

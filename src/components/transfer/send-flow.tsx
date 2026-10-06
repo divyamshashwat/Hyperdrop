@@ -10,6 +10,26 @@ import { Dots, Facts, Lede, PrimaryButton, Screen, SecondaryButton, StatusLine, 
 const LARGE_BYTES = 1_000_000_000;
 
 /**
+ * Safari only shares this phone's Wi-Fi address with pages that have microphone access, and
+ * without it the computer can't reach the phone directly. Say so plainly; one tap fixes it.
+ */
+function LanPrompt({ api }: { api: TransferApi }) {
+  if (!api.m.lanPrompt) return null;
+  return (
+    <div role="alert" className="mt-6 rounded-[14px] bg-white/[0.06] p-4">
+      <p className="text-[15px] text-foreground">Allow local connection</p>
+      <p className="t-small mt-1">
+        Safari only lets this phone be found on your Wi-Fi when the page has microphone access. Nothing is recorded, and
+        it switches off as soon as the devices connect.
+      </p>
+      <div className="mt-3">
+        <SecondaryButton onClick={api.actions.allowLan}>Allow</SecondaryButton>
+      </div>
+    </div>
+  );
+}
+
+/**
  * The sender's home after scanning the QR. The connection forms in the
  * background while the user does what they came to do: choose photos.
  */
@@ -26,6 +46,7 @@ export function ChooseView({ api, openPicker }: { api: TransferApi; openPicker: 
       }
     >
       <StatusLine route={m.route} peer={m.peerLabel} role={m.role} pending={!connected} />
+      <LanPrompt api={api} />
       <Title className="mt-6">{connected ? "Ready to send." : "Almost ready."}</Title>
       <Lede>Choose the photos you want to send. They arrive exactly as they are: same file, same quality.</Lede>
       <Facts
@@ -101,6 +122,7 @@ export function SelectionView({
       }
     >
       {!needsCode && <StatusLine route={m.route} peer={m.peerLabel} role={m.role} pending={!connected} className="mb-6" />}
+      {!needsCode && <LanPrompt api={api} />}
       <Title className="num">{pluralPhotos(m.files.length)}</Title>
       <p className="t-lede num mt-2">
         <span className="text-foreground">{formatBytes(total, total >= 1e9 ? 2 : 1)}</span> · originals, no compression

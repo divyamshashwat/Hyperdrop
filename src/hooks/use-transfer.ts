@@ -209,6 +209,8 @@ export function useTransfer({ roomId }: Options = {}) {
       },
       decline: () => session.current?.reject(),
       cancel: () => session.current?.cancel(),
+      /** Safari hides its local address without microphone access: unlock it (must run from the tap). */
+      allowLan: () => void session.current?.unlockLan(),
       resume: () => session.current?.resume(),
       backToFiles: () => dispatch({ type: "BACK_TO_FILES" }),
       reset: () => {

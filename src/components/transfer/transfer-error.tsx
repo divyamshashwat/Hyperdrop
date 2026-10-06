@@ -97,14 +97,14 @@ function connectCopy(hint: ConnectHint): Copy {
       title: "This browser is blocking the direct connection",
       body: brave
         ? `Brave hides this device's network address, so the other device can't reach it. To fix it, ${BRAVE_FIX} Or use Chrome, Edge or Safari.`
-        : "A privacy setting or extension hides this device's network address, so the other device can't reach it. Allow WebRTC for this site, or try Chrome, Edge or Safari.",
+        : "This browser hides this device's network address, so the other device can't reach it. Try again and tap Allow when asked for a local connection, or allow WebRTC for this site in your privacy settings.",
       action: "Try again",
     };
   }
   if (hint === "remote-hidden") {
     return {
       title: "The other device's browser is blocking the connection",
-      body: `It hides its network address, so this device can't reach it. If it uses Brave, ${BRAVE_FIX} Or open the page there in Chrome, Edge or Safari.`,
+      body: `It hides its network address, so this device can't reach it. On an iPhone, try again and tap Allow when it asks for a local connection. If it uses Brave, ${BRAVE_FIX}`,
       action: "Try again",
     };
   }
