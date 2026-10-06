@@ -1,6 +1,6 @@
 "use client";
 
-import type { ErrorCode, Machine } from "@/lib/webrtc/connection-state";
+import type { ConnectHint, ErrorCode, Machine } from "@/lib/webrtc/connection-state";
 import { Lede, PrimaryButton, Screen, TextButton, Title } from "./ui";
 
 interface Copy {
@@ -87,6 +87,34 @@ const COPY: Record<ErrorCode, Copy> = {
   unknown: { title: "Something went wrong", body: "Try again.", action: "Try again" },
 };
 
+const BRAVE_FIX = "open brave://settings/privacy, set “WebRTC IP handling policy” to Default, and try again.";
+
+/** A connection that never formed, explained from the candidates each side offered. */
+function connectCopy(hint: ConnectHint): Copy {
+  const brave = typeof navigator !== "undefined" && "brave" in navigator;
+  if (hint === "local-hidden") {
+    return {
+      title: "This browser is blocking the direct connection",
+      body: brave
+        ? `Brave hides this device's network address, so the other device can't reach it. To fix it, ${BRAVE_FIX} Or use Chrome, Edge or Safari.`
+        : "A privacy setting or extension hides this device's network address, so the other device can't reach it. Allow WebRTC for this site, or try Chrome, Edge or Safari.",
+      action: "Try again",
+    };
+  }
+  if (hint === "remote-hidden") {
+    return {
+      title: "The other device's browser is blocking the connection",
+      body: `It hides its network address, so this device can't reach it. If it uses Brave, ${BRAVE_FIX} Or open the page there in Chrome, Edge or Safari.`,
+      action: "Try again",
+    };
+  }
+  return {
+    title: "Direct connection unavailable",
+    body: "Both devices offered a direct path, but the network kept them apart. Make sure they're on the same Wi-Fi; guest networks and some mesh routers isolate devices. A phone hotspot works as a fallback.",
+    action: "Try again",
+  };
+}
+
 export function TransferError({
   m,
   onPrimary,
@@ -102,7 +130,9 @@ export function TransferError({
     ? { title: "Transfer cancelled", body: "Nothing was sent.", action: m.files.length ? "Back to files" : "Start over" }
     : code === "interrupted" && m.role === "receiver"
       ? { ...COPY.interrupted, body: "Waiting for the sender to reconnect. Anything already received is kept.", action: undefined }
-      : COPY[code];
+      : code === "connection-failed" && m.error?.hint
+        ? connectCopy(m.error.hint)
+        : COPY[code];
 
   return (
     <Screen

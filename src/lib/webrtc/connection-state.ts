@@ -27,6 +27,13 @@ export type Phase =
 export type Role = "sender" | "receiver" | null;
 export type Route = "direct" | "relayed" | null;
 
+/**
+ * Why a direct connection couldn't form, judged from the candidates each side offered:
+ * this browser hid its local address, the other one did, or both offered one and the
+ * network still kept them apart (client isolation, firewall, different networks).
+ */
+export type ConnectHint = "local-hidden" | "remote-hidden" | "network";
+
 export type ErrorCode =
   | "connection-failed"
   | "interrupted"
@@ -66,7 +73,7 @@ export interface Machine {
   peerLabel: string | null;
   route: Route;
   summary: Summary | null;
-  error: { code: ErrorCode; detail?: string } | null;
+  error: { code: ErrorCode; detail?: string; hint?: ConnectHint } | null;
   /** Phase to return to when a reconnect succeeds. */
   resumePhase: "sending" | "receiving" | "awaiting-acceptance" | "connected" | null;
   /** Percent resumed from, shown once after a successful resume. */
@@ -110,7 +117,7 @@ export type Action =
   | { type: "RECONNECTING" }
   | { type: "PAUSED" }
   | { type: "RESUMED" }
-  | { type: "FAILED"; code: ErrorCode; detail?: string }
+  | { type: "FAILED"; code: ErrorCode; detail?: string; hint?: ConnectHint }
   | { type: "EXPIRED" }
   | { type: "CANCELLED"; byPeer?: boolean }
   | { type: "BACK_TO_FILES" }
@@ -211,7 +218,7 @@ export function reduce(m: Machine, a: Action): Machine {
     case "RESUMED":
       return { ...m, phase: "reconnecting", error: null };
     case "FAILED":
-      return { ...m, phase: "failed", error: { code: a.code, detail: a.detail } };
+      return { ...m, phase: "failed", error: { code: a.code, detail: a.detail, hint: a.hint } };
     case "EXPIRED":
       if (m.phase === "completed" || m.phase === "idle") return m;
       return { ...m, phase: "expired", error: { code: "session-expired" } };

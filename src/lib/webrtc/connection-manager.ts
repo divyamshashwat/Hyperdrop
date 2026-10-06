@@ -7,7 +7,7 @@ import { BenchResponder, BenchRunner, type BenchResult } from "../benchmarks/syn
 import { EMPTY_PATH, jsHeapBytes, samplePath, startLagMonitor, type PathStats } from "../diagnostics/stats";
 import { createWorkerHasher } from "./checksum";
 import { DEFAULT_TUNING, resolveTuning, type Tuning } from "./tuning";
-import type { Action, ErrorCode, Summary } from "./connection-state";
+import type { Action, ConnectHint, ErrorCode, Summary } from "./connection-state";
 import { DataChannelLink } from "./data-channel";
 import { loadIceConfig, type IceConfig, type RouteInfo } from "./ice";
 import { PeerConnectionManager, type PcState } from "./peer-connection";
@@ -469,7 +469,7 @@ export class TransferSession {
     if (this.finished) return;
     if (s === "failed") {
       if (!this.everOpened) {
-        this.ev.dispatch({ type: "FAILED", code: "connection-failed", detail: "ice-failed" });
+        this.failConnect("ice-failed");
         this.shutdownSoon();
         return;
       }
@@ -545,9 +545,29 @@ export class TransferSession {
     this.connectTimer = setTimeout(() => {
       if (this.everOpened || this.finished) return;
       this.finished = true;
-      this.ev.dispatch({ type: "FAILED", code: "connection-failed", detail: "timeout" });
+      this.failConnect("timeout");
       this.shutdownSoon();
     }, CONNECT_TIMEOUT_MS);
+  }
+
+  /**
+   * The direct path never opened. Say which side is the problem, from the candidates each offered:
+   * no "host" candidate means that browser hides its LAN address (Brave, privacy extensions), so two
+   * devices on one Wi-Fi can only meet through the router, which most routers don't allow.
+   */
+  private failConnect(reason: string) {
+    const c = this.peer?.candidates() ?? { local: {}, remote: {} };
+    const fmt = (t: Record<string, number>) =>
+      Object.entries(t)
+        .map(([k, v]) => `${k} ${v}`)
+        .join(", ") || "none";
+    const hint: ConnectHint = !c.local.host ? "local-hidden" : !c.remote.host ? "remote-hidden" : "network";
+    this.ev.dispatch({
+      type: "FAILED",
+      code: "connection-failed",
+      detail: `${reason} · this device: ${fmt(c.local)} · other device: ${fmt(c.remote)}`,
+      hint,
+    });
   }
 
   private clearTimers() {
