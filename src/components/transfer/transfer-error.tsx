@@ -92,6 +92,13 @@ const BRAVE_FIX = "open brave://settings/privacy, set “WebRTC IP handling poli
 /** A connection that never formed, explained from the candidates each side offered. */
 function connectCopy(hint: ConnectHint): Copy {
   const brave = typeof navigator !== "undefined" && "brave" in navigator;
+  if (hint === "no-reply") {
+    return {
+      title: "The other device didn't answer",
+      body: "The devices found each other, but the other device's reply never arrived. Reload the page on both devices and try again.",
+      action: "Try again",
+    };
+  }
   if (hint === "local-hidden") {
     return {
       title: "This browser is blocking the direct connection",

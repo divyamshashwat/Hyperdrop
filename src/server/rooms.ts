@@ -187,6 +187,7 @@ export class RoomStore {
     if (!room) return false;
     room.conns[role]?.close();
     room.conns[role] = conn;
+    slog(roomId, `${role} stream attached, flushing ${room.pending[role].length} queued`);
     room.lastActivity = this.now();
     if (role === "guest") room.guestSeenAt = this.now();
     const other: Role = role === "host" ? "guest" : "host";
@@ -201,6 +202,7 @@ export class RoomStore {
   detach(roomId: string, role: Role, conn: Conn) {
     const room = this.rooms.get(roomId);
     if (room && room.conns[role] === conn) {
+      slog(roomId, `${role} stream detached`);
       delete room.conns[role];
       if (role === "guest") room.guestSeenAt = this.now();
     }
@@ -254,12 +256,15 @@ export class RoomStore {
 
   private deliver(room: Room, to: Role, event: string, data: unknown) {
     const conn = room.conns[to];
+    const what = event === "signal" ? `signal:${(data as { kind?: string }).kind}` : event;
     if (conn) {
       conn.send(event, data);
+      slog(room.id, `→ ${to} ${what} (live)`);
       return;
     }
     const q = room.pending[to];
     if (q.length < this.limits.maxPending) q.push({ event, data });
+    slog(room.id, `→ ${to} ${what} (queued, ${to} not connected)`);
   }
 
   private destroy(room: Room, event: "expired" | "closed") {
@@ -290,4 +295,9 @@ export function getRoomStore(): RoomStore {
     g.__originRooms.startSweeper();
   }
   return g.__originRooms;
+}
+
+/** `SIGNAL_LOG=1` traces signaling per room on the server console (never SDP/ICE contents). */
+function slog(roomId: string, msg: string) {
+  if (process.env.SIGNAL_LOG === "1") console.info(`[signal ${roomId.slice(0, 6)}] ${msg}`);
 }

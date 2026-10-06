@@ -30,9 +30,10 @@ export type Route = "direct" | "relayed" | null;
 /**
  * Why a direct connection couldn't form, judged from the candidates each side offered:
  * this browser hid its local address, the other one did, or both offered one and the
- * network still kept them apart (client isolation, firewall, different networks).
+ * network still kept them apart (client isolation, firewall, different networks), or the
+ * other device's reply (offer/answer) never arrived over signaling at all.
  */
-export type ConnectHint = "local-hidden" | "remote-hidden" | "network";
+export type ConnectHint = "local-hidden" | "remote-hidden" | "network" | "no-reply";
 
 export type ErrorCode =
   | "connection-failed"

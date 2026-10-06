@@ -21,6 +21,8 @@ export class SignalingClient {
   private terminal = false;
   private ctrl: AbortController | null = null;
   private queue: Promise<void> = Promise.resolve();
+  /** Messages that never reached the server (diagnostics). */
+  failedPosts = 0;
 
   constructor(
     private roomId: string,
@@ -73,12 +75,16 @@ export class SignalingClient {
           this.expire();
           return;
         }
-        if (res.status !== 429 && res.status < 500) return;
+        if (res.status !== 429 && res.status < 500) {
+          this.failedPosts++;
+          return;
+        }
       } catch {
         /* network blip: retry */
       }
       await sleep(400 * (attempt + 1));
     }
+    if (!this.closed) this.failedPosts++;
   }
 
   private expire() {

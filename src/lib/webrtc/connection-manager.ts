@@ -100,6 +100,10 @@ export class TransferSession {
   private lanTried = false;
   /** Between "no local address" and the retry that follows the tap. */
   private lanWaiting = false;
+  /** What actually arrived over signaling, for the failure details: "no answer" and "answer but no ICE" differ. */
+  private sigIn: Record<string, number> = {};
+  private sigStream = "none";
+  private sigReady = 0;
 
   private meter = new RollingMeter();
   private latest: Progress | null = null;
@@ -396,6 +400,7 @@ export class TransferSession {
   private signalingHandlers() {
     return {
       onReady: () => {
+        this.sigReady++;
         this.streamLost = false;
       },
       onPeerJoined: (label: string) => {
@@ -411,6 +416,7 @@ export class TransferSession {
       },
       onSignal: (kind: Parameters<PeerConnectionManager["handleSignal"]>[0], data: unknown) => {
         // A fresh offer is a fresh attempt (e.g. the phone just unlocked its local address): give it full time.
+        this.sigIn[kind] = (this.sigIn[kind] ?? 0) + 1;
         if (kind === "offer" && this.role === "receiver" && !this.everOpened && !this.finished) this.armConnectTimeout();
         void this.peer?.handleSignal(kind, data);
       },
@@ -423,6 +429,7 @@ export class TransferSession {
         this.shutdownSoon();
       },
       onStream: (s: "open" | "reconnecting" | "lost") => {
+        this.sigStream = s;
         this.streamLost = s === "lost";
         if (s === "lost" && !this.everOpened && !this.finished) {
           this.ev.dispatch({ type: "FAILED", code: "connection-failed", detail: "signaling-lost" });
@@ -619,11 +626,21 @@ export class TransferSession {
       Object.entries(t)
         .map(([k, v]) => `${k} ${v}`)
         .join(", ") || "none";
-    const hint: ConnectHint = !c.local.host ? "local-hidden" : !c.remote.host ? "remote-hidden" : "network";
+    const replied = this.sigIn[this.role === "sender" ? "answer" : "offer"];
+    const hint: ConnectHint = !replied
+      ? "no-reply"
+      : !c.local.host
+        ? "local-hidden"
+        : !c.remote.host
+          ? "remote-hidden"
+          : "network";
     this.ev.dispatch({
       type: "FAILED",
       code: "connection-failed",
-      detail: `${reason} · this device: ${fmt(c.local)} · other device: ${fmt(c.remote)}`,
+      detail:
+        `${reason} · this device: ${fmt(c.local)} · other device: ${fmt(c.remote)}` +
+        ` · signals in: ${fmt(this.sigIn)} · stream ${this.sigStream}, ready ${this.sigReady}` +
+        ` · posts failed: ${this.signaling?.failedPosts ?? 0}`,
       hint,
     });
   }
