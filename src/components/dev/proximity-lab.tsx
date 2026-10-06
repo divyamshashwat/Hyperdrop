@@ -1,13 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { UltrasonicDecoder, bandLevel, toDb } from "@/lib/proximity/decoder";
+import { ToneDecoder, bandLevel, toDb } from "@/lib/proximity/decoder";
 import { openMicTap, type MicTap } from "@/lib/proximity/mic-tap";
 import { DEFAULT_AMPLITUDE, chooseOutputProfile, profilesForCapture, renderTone } from "@/lib/proximity/modulation";
 import { PROTOCOL_VERSION, tokenToHex } from "@/lib/proximity/protocol";
-import { generateUltrasonicSignal } from "@/lib/proximity/ultrasonic-encoder";
+import { generateNearbySignal } from "@/lib/proximity/encoder";
 
-const TEST_FREQS = [20000, 20500, 21000, 21500, 22000, 22500, 23000];
+const TEST_FREQS = [1800, 2400, 3000, 3600, 4200, 4800, 6000];
 
 /**
  * Hardware calibration for Nearby. Run "Emit" on the computer and "Listen" on
@@ -84,7 +84,7 @@ function Emit() {
     const r = new Uint32Array(1);
     crypto.getRandomValues(r);
     setTestToken(tokenToHex(r[0]));
-    play(generateUltrasonicSignal(c, { version: PROTOCOL_VERSION, flags: 0, token: r[0] }, profile, level), `packet ${profile.id}`, 3);
+    play(generateNearbySignal(c, { version: PROTOCOL_VERSION, flags: 0, token: r[0] }, profile, level), `packet ${profile.id}`, 3);
   };
 
   /** Render the real AudioBuffer offline at this browser's rates, add noise, decode. No speaker, no mic. */
@@ -96,7 +96,7 @@ function Emit() {
       const r = new Uint32Array(1);
       crypto.getRandomValues(r);
       const off = new OfflineAudioContext(1, sr * 3, sr);
-      const buf = generateUltrasonicSignal(off, { version: PROTOCOL_VERSION, flags: 0, token: r[0] }, profile, level);
+      const buf = generateNearbySignal(off, { version: PROTOCOL_VERSION, flags: 0, token: r[0] }, profile, level);
       const src = off.createBufferSource();
       src.buffer = buf;
       src.connect(off.destination);
@@ -104,7 +104,7 @@ function Emit() {
       const rendered = (await off.startRendering()).getChannelData(0);
       const x = new Float32Array(rendered.length);
       for (let i = 0; i < x.length; i++) x[i] = rendered[i] * 0.3 + (Math.random() - 0.5) * 0.02;
-      const dec = new UltrasonicDecoder(profile, sr);
+      const dec = new ToneDecoder(profile, sr);
       const got = dec.push(x).find((e) => e.type === "packet");
       const ok = !!got && got.type === "packet" && got.packet.payload.token === r[0];
       out.push(`${sr} Hz ${profile.id}: ${ok ? "decoded ✓" : "FAILED ✕"}`);
@@ -151,7 +151,7 @@ function Emit() {
 function Listen({ ua }: { ua: string }) {
   const tap = useRef<MicTap | null>(null);
   const buf = useRef<Float32Array[]>([]);
-  const decoders = useRef<UltrasonicDecoder[]>([]);
+  const decoders = useRef<ToneDecoder[]>([]);
   const preambleAt = useRef(0);
   const [info, setInfo] = useState<{ rate: number; settings: MediaTrackSettings; label: string } | null>(null);
   const [levels, setLevels] = useState<number[]>([]);
@@ -177,7 +177,7 @@ function Listen({ ua }: { ua: string }) {
         }
       });
       tap.current = t;
-      decoders.current = profilesForCapture(t.ctx.sampleRate).map((p) => new UltrasonicDecoder(p, t.ctx.sampleRate));
+      decoders.current = profilesForCapture(t.ctx.sampleRate).map((p) => new ToneDecoder(p, t.ctx.sampleRate));
       setInfo({ rate: t.ctx.sampleRate, settings: t.settings, label: t.label });
     } catch (e) {
       setError((e as DOMException)?.name ?? "failed");

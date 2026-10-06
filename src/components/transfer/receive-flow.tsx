@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { formatBytes, formatCode, pluralPhotos } from "@/lib/files/format";
 import { pickFolder, type FsDir } from "@/lib/files/sink";
-import { NearbyBroadcaster } from "@/lib/proximity/ultrasonic-encoder";
+import { NearbyBroadcaster } from "@/lib/proximity/encoder";
 import { friendlyDevice, friendlyDeviceStart } from "@/lib/session/device";
 import type { TransferApi } from "@/hooks/use-transfer";
 import { ConfirmCancel } from "./confirm-cancel";
@@ -98,7 +98,7 @@ export function ReceiveWaiting({ api }: { api: TransferApi }) {
     >
       <Title>{on ? "Bring your iPhone near." : "Scan with your iPhone."}</Title>
       <Lede>
-        {on ? "On the phone, tap Find a nearby computer. Or scan the code." : "Open the camera and point it at the code."}
+        {on ? "You'll hear a soft chirp. On the phone, tap Find a nearby computer. Or scan the code." : "Open the camera and point it at the code."}
         {dest ? (
           <>
             {" "}

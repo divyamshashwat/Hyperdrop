@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { toSelected } from "@/lib/files/file-utils";
 import { FolderSink, type FsDir, type ReceivedFile } from "@/lib/files/sink";
-import { NearbyBroadcaster, type BroadcastState } from "@/lib/proximity/ultrasonic-encoder";
+import { NearbyBroadcaster, type BroadcastState } from "@/lib/proximity/encoder";
 import { parseJoinHash, normalizeCode } from "@/lib/session/room";
 import { supportsRequiredApis } from "@/lib/session/device";
 import { EMPTY_METRICS, type MetricsSnapshot } from "@/lib/transfer/metrics";
