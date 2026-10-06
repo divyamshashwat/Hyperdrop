@@ -102,7 +102,6 @@ export class TransferSession {
   private lanWaiting = false;
   /** What actually arrived over signaling, for the failure details: "no answer" and "answer but no ICE" differ. */
   private sigIn: Record<string, number> = {};
-  private sigStream = "none";
   private sigReady = 0;
 
   private meter = new RollingMeter();
@@ -429,7 +428,6 @@ export class TransferSession {
         this.shutdownSoon();
       },
       onStream: (s: "open" | "reconnecting" | "lost") => {
-        this.sigStream = s;
         this.streamLost = s === "lost";
         if (s === "lost" && !this.everOpened && !this.finished) {
           this.ev.dispatch({ type: "FAILED", code: "connection-failed", detail: "signaling-lost" });
@@ -477,7 +475,7 @@ export class TransferSession {
       if (wasReconnect) this.reconnects++;
       this.clearLoss();
       if (this.connectTimer) clearTimeout(this.connectTimer);
-      if (this.signaling) this.signaling.pollMs = 2000; // only bye / peer-left matter now
+      if (this.signaling) this.signaling.pollMs = 3000; // only bye / peer-left matter now
       this.ev.dispatch({ type: "CONNECTED", label: this.peerLabel, route: this.route?.route ?? null });
       this.sender?.attach(this.link);
       this.receiver?.attach(this.link);
@@ -640,8 +638,8 @@ export class TransferSession {
       code: "connection-failed",
       detail:
         `${reason} · this device: ${fmt(c.local)} · other device: ${fmt(c.remote)}` +
-        ` · signals in: ${fmt(this.sigIn)} · ${this.signaling?.mode ?? "no"} ${this.sigStream}, ready ${this.sigReady}` +
-        ` · posts failed: ${this.signaling?.failedPosts ?? 0}`,
+        ` · signals in: ${fmt(this.sigIn)} (stream ${this.signaling?.via.stream ?? 0}, poll ${this.signaling?.via.poll ?? 0})` +
+        ` · paths ${this.signaling?.mode ?? "none"}, ready ${this.sigReady} · posts failed: ${this.signaling?.failedPosts ?? 0}`,
       hint,
     });
   }

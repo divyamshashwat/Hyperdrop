@@ -26,9 +26,10 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
         } catch {}
       };
       conn = {
-        send: (event, data) => {
+        send: (event, data, seq) => {
           try {
-            controller.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+            const id = seq ? `id: ${seq}\n` : "";
+            controller.enqueue(enc.encode(`${id}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
           } catch {}
         },
         close: closeAll,
