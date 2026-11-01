@@ -14,11 +14,14 @@ import { TONES } from "./protocol";
  * detector bins wide, so reverb and frequency error stay well separated.
  */
 export interface FrequencyProfile {
-  id: "audible";
+  /** "audible" ships; other ids exist only in calibration sweeps (scripts/nearby-sweep.ts). */
+  id: string;
   /** Four tones, low to high. Symbol n is sent as tones[n]. */
   tones: readonly [number, number, number, number];
   /** Both ends need at least this sample rate for the top tone to be representable. */
   minSampleRate: number;
+  /** Symbol length; defaults to SYMBOL_MS. */
+  symbolMs?: number;
 }
 
 export const PROFILES: readonly FrequencyProfile[] = [{ id: "audible", tones: [2400, 3000, 3600, 4200], minSampleRate: 16000 }];
@@ -31,18 +34,29 @@ export const GAP_MS = 300;
 /** Conservative default output level (linear, 0..1). Audible, so keep it modest. */
 export const DEFAULT_AMPLITUDE = 0.18;
 
+/**
+ * Calibration candidates, from the simulated sweep (`npm run sweep:nearby`, docs/NEARBY.md).
+ * Every listener decodes them alongside the shipping profile, so a computer opened with
+ * `?nearbyProfile=<id>` can A/B one on real hardware without the phone changing anything.
+ */
+export const CANDIDATE_PROFILES: readonly FrequencyProfile[] = [];
+
+const fits = (p: FrequencyProfile, sampleRate: number) => sampleRate >= p.minSampleRate && p.tones[TONES - 1] < (sampleRate / 2) * 0.97;
+
 /** The profile a transmitter should use, from the sample rate its audio output actually runs at. */
-export function chooseOutputProfile(sampleRate: number): FrequencyProfile | null {
-  return PROFILES.find((p) => sampleRate >= p.minSampleRate && p.tones[TONES - 1] < (sampleRate / 2) * 0.97) ?? null;
+export function chooseOutputProfile(sampleRate: number, overrideId?: string | null): FrequencyProfile | null {
+  const wanted = overrideId ? [...PROFILES, ...CANDIDATE_PROFILES].find((p) => p.id === overrideId) : undefined;
+  if (wanted && fits(wanted, sampleRate)) return wanted;
+  return PROFILES.find((p) => fits(p, sampleRate)) ?? null;
 }
 
-/** Profiles a receiver can actually hear at its real capture rate (top tone well under Nyquist). */
+/** Profiles a receiver can actually hear at its real capture rate (top tone well under Nyquist), candidates included. */
 export function profilesForCapture(sampleRate: number): FrequencyProfile[] {
-  return PROFILES.filter((p) => p.tones[TONES - 1] < (sampleRate / 2) * 0.97);
+  return [...PROFILES, ...CANDIDATE_PROFILES].filter((p) => p.tones[TONES - 1] < (sampleRate / 2) * 0.97);
 }
 
-export function symbolSamples(sampleRate: number): number {
-  return Math.round((sampleRate * SYMBOL_MS) / 1000);
+export function symbolSamples(sampleRate: number, symbolMs = SYMBOL_MS): number {
+  return Math.round((sampleRate * symbolMs) / 1000);
 }
 
 /**
@@ -57,7 +71,7 @@ export function renderSymbols(
   amplitude = DEFAULT_AMPLITUDE,
   trailingGapMs = 0,
 ): Float32Array {
-  const n = symbolSamples(sampleRate);
+  const n = symbolSamples(sampleRate, profile.symbolMs);
   const ramp = Math.max(1, Math.round((sampleRate * RAMP_MS) / 1000));
   const gap = Math.round((sampleRate * trailingGapMs) / 1000);
   const out = new Float32Array(symbols.length * n + gap);

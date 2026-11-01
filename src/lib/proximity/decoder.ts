@@ -72,7 +72,7 @@ export class ToneDecoder {
     readonly profile: FrequencyProfile,
     readonly sampleRate: number,
   ) {
-    this.hop = Math.floor(symbolSamples(sampleRate) / HOPS_PER_SYMBOL);
+    this.hop = Math.floor(symbolSamples(sampleRate, profile.symbolMs) / HOPS_PER_SYMBOL);
     this.coeffs = profile.tones.map((f) => PROBE_OFFSETS.map((o) => 2 * Math.cos((2 * Math.PI * (f + o)) / sampleRate)));
     this.pending = new Float32Array(this.hop);
     const cap = (PREAMBLE.length + SYNC.length + DATA_SYMBOLS + 4) * HOPS_PER_SYMBOL + 16;

@@ -46,7 +46,7 @@ export class NearbyBroadcaster {
     this.stop(false);
     this.ctx = new AudioContext(); // no forced sampleRate: we read what the hardware gives us
     void this.ctx.resume();
-    this.profile = chooseOutputProfile(this.ctx.sampleRate);
+    this.profile = chooseOutputProfile(this.ctx.sampleRate, profileOverride());
     resetNearbyDebug("broadcaster");
     nearbyDebug.contextRate = this.ctx.sampleRate;
     nearbyDebug.capability = this.profile ? `transmit ${this.profile.id}` : "output rate too low for Nearby";
@@ -106,6 +106,12 @@ export class NearbyBroadcaster {
     }
     if (src) this.onState(ended ? "ended" : "off");
   }
+}
+
+/** `?nearbyProfile=<id>` plays a calibration candidate instead of the shipping profile (listeners decode both). */
+function profileOverride(): string | null {
+  if (typeof location === "undefined") return null;
+  return new URLSearchParams(location.search).get("nearbyProfile");
 }
 
 /** `?nearbyLevel=0.1` lets calibration find the lowest reliable level without a rebuild. */
