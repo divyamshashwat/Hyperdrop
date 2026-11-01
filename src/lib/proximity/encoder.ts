@@ -3,7 +3,7 @@ import { DEFAULT_AMPLITUDE, GAP_MS, chooseOutputProfile, renderSymbols, type Fre
 import { PROTOCOL_VERSION, encodePacket, hexToToken, type PairingPayload } from "./protocol";
 
 /** PairingPayload -> AudioBuffer (one packet followed by a short silence). */
-export function generateUltrasonicSignal(
+export function generateNearbySignal(
   ctx: BaseAudioContext,
   payload: PairingPayload,
   profile: FrequencyProfile,
@@ -17,11 +17,11 @@ export function generateUltrasonicSignal(
 
 export type BroadcastState = "off" | "on" | "ended" | "unsupported";
 
-const MAX_BROADCAST_MS = 10_000;
+const MAX_BROADCAST_MS = 15_000;
 
 /**
  * The receiver's transmitter. Plays the same short packet on a loop for at most
- * 10 s, behind smooth gain ramps, then stops on its own. Stops immediately when
+ * 15 s (about four packets), behind smooth gain ramps, then stops on its own. Stops immediately when
  * told (a phone joined, the user cancelled, the page went away).
  */
 export class NearbyBroadcaster {
@@ -46,10 +46,10 @@ export class NearbyBroadcaster {
     this.stop(false);
     this.ctx = new AudioContext(); // no forced sampleRate: we read what the hardware gives us
     void this.ctx.resume();
-    this.profile = chooseOutputProfile(this.ctx.sampleRate);
+    this.profile = chooseOutputProfile(this.ctx.sampleRate, profileOverride());
     resetNearbyDebug("broadcaster");
     nearbyDebug.contextRate = this.ctx.sampleRate;
-    nearbyDebug.capability = this.profile ? `transmit ${this.profile.id}` : "output rate too low for silent pairing";
+    nearbyDebug.capability = this.profile ? `transmit ${this.profile.id}` : "output rate too low for Nearby";
     if (!this.profile) {
       this.stop(false);
       this.onState("unsupported");
@@ -61,7 +61,7 @@ export class NearbyBroadcaster {
   play(tokenHex: string, amplitude = levelOverride() ?? DEFAULT_AMPLITUDE) {
     const ctx = this.ctx;
     if (!ctx || !this.profile) return;
-    const buffer = generateUltrasonicSignal(ctx, { version: PROTOCOL_VERSION, flags: 0, token: hexToToken(tokenHex) }, this.profile, amplitude);
+    const buffer = generateNearbySignal(ctx, { version: PROTOCOL_VERSION, flags: 0, token: hexToToken(tokenHex) }, this.profile, amplitude);
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(0, ctx.currentTime);
     gain.gain.linearRampToValueAtTime(1, ctx.currentTime + 0.05);
@@ -106,6 +106,12 @@ export class NearbyBroadcaster {
     }
     if (src) this.onState(ended ? "ended" : "off");
   }
+}
+
+/** `?nearbyProfile=<id>` plays a calibration candidate instead of the shipping profile (listeners decode both). */
+function profileOverride(): string | null {
+  if (typeof location === "undefined") return null;
+  return new URLSearchParams(location.search).get("nearbyProfile");
 }
 
 /** `?nearbyLevel=0.1` lets calibration find the lowest reliable level without a rebuild. */

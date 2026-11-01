@@ -10,8 +10,15 @@ export type Role = "host" | "guest";
 export type SignalKind = "offer" | "answer" | "ice" | "bye";
 
 export interface Conn {
-  send(event: string, data: unknown): void;
+  /** `seq` numbers a relayed message so a client receiving it over both stream and poll can de-duplicate. */
+  send(event: string, data: unknown, seq?: number): void;
   close(): void;
+}
+
+export interface LoggedMessage {
+  seq: number;
+  event: string;
+  data: unknown;
 }
 
 interface Room {
@@ -25,7 +32,13 @@ interface Room {
   lastActivity: number;
   guestSeenAt: number;
   conns: Partial<Record<Role, Conn>>;
-  pending: Record<Role, Array<{ event: string; data: unknown }>>;
+  /**
+   * Every message for a role, numbered. Streams are best-effort (a proxy can stall one silently),
+   * so clients also poll for anything past the last number they handled; nothing depends on a
+   * stream staying healthy.
+   */
+  log: Record<Role, LoggedMessage[]>;
+  seq: Record<Role, number>;
   signalCount: number;
   /** Current Nearby token (8 hex chars = 32 bits), if one is being broadcast. */
   nearby: { token: string; expiresAt: number } | null;
@@ -48,7 +61,7 @@ export const DEFAULT_LIMITS: RoomLimits = {
   maxLifetimeMs: 4 * 60 * 60_000,
   guestAbsentMs: 45_000,
   maxSignals: 600,
-  maxPending: 64,
+  maxPending: 256,
   nearbyTtlMs: 20_000,
 };
 
@@ -107,7 +120,8 @@ export class RoomStore {
       lastActivity: t,
       guestSeenAt: t,
       conns: {},
-      pending: { host: [], guest: [] },
+      log: { host: [], guest: [] },
+      seq: { host: 0, guest: 0 },
       signalCount: 0,
       nearby: null,
     };
@@ -187,6 +201,7 @@ export class RoomStore {
     if (!room) return false;
     room.conns[role]?.close();
     room.conns[role] = conn;
+    slog(roomId, `${role} stream attached, replaying ${room.log[role].length}`);
     room.lastActivity = this.now();
     if (role === "guest") room.guestSeenAt = this.now();
     const other: Role = role === "host" ? "guest" : "host";
@@ -194,16 +209,28 @@ export class RoomStore {
       role,
       peer: other === "guest" ? (room.guestToken ? room.labels.guest : null) : room.labels.host,
     });
-    for (const m of room.pending[role].splice(0)) conn.send(m.event, m.data);
+    for (const m of room.log[role]) conn.send(m.event, m.data, m.seq); // the client skips what it already has
     return true;
   }
 
   detach(roomId: string, role: Role, conn: Conn) {
     const room = this.rooms.get(roomId);
     if (room && room.conns[role] === conn) {
+      slog(roomId, `${role} stream detached`);
       delete room.conns[role];
       if (role === "guest") room.guestSeenAt = this.now();
     }
+  }
+
+  /** Poll: everything for `role` numbered after `after`. Polling also counts as presence. */
+  poll(roomId: string, role: Role, after: number): LoggedMessage[] | null {
+    const room = this.rooms.get(roomId);
+    if (!room) return null;
+    room.lastActivity = this.now();
+    if (role === "guest") room.guestSeenAt = this.now();
+    const out = room.log[role].filter((m) => m.seq > after);
+    if (out.length) slog(roomId, `${role} polled ${out.length} after #${after}`);
+    return out;
   }
 
   relay(roomId: string, from: Role, kind: SignalKind, data: unknown): boolean {
@@ -226,7 +253,8 @@ export class RoomStore {
     delete room.conns.guest;
     room.guestToken = null;
     room.labels.guest = "";
-    room.pending.guest = [];
+    room.log.guest = []; // a new sender starts from 1
+    room.seq.guest = 0;
     this.codes.set(room.code, room.id); // a new sender may pair again
     this.deliver(room, "host", "peer-left", {});
   }
@@ -253,13 +281,14 @@ export class RoomStore {
   }
 
   private deliver(room: Room, to: Role, event: string, data: unknown) {
+    const msg = { seq: ++room.seq[to], event, data };
+    const log = room.log[to];
+    log.push(msg);
+    if (log.length > this.limits.maxPending) log.shift();
     const conn = room.conns[to];
-    if (conn) {
-      conn.send(event, data);
-      return;
-    }
-    const q = room.pending[to];
-    if (q.length < this.limits.maxPending) q.push({ event, data });
+    conn?.send(event, data, msg.seq);
+    const what = event === "signal" ? `signal:${(data as { kind?: string }).kind}` : event;
+    slog(room.id, `→ ${to} #${msg.seq} ${what} (${conn ? "streamed + logged" : "logged, no stream"})`);
   }
 
   private destroy(room: Room, event: "expired" | "closed") {
@@ -290,4 +319,9 @@ export function getRoomStore(): RoomStore {
     g.__originRooms.startSweeper();
   }
   return g.__originRooms;
+}
+
+/** `SIGNAL_LOG=1` traces signaling per room on the server console (never SDP/ICE contents). */
+function slog(roomId: string, msg: string) {
+  if (process.env.SIGNAL_LOG === "1") console.info(`[signal ${roomId.slice(0, 6)}] ${msg}`);
 }

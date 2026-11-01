@@ -12,15 +12,37 @@ export interface SignalingHandlers {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Consecutive failures (stream and poll both down) before signaling is reported lost. */
+const MAX_POLL_FAILURES = 12;
+
 /**
- * Signaling transport: server-sent events down, ordered POSTs up. It only ever
+ * Signaling transport: ordered POSTs up; down, two paths at once. It only ever
  * carries SDP / ICE blobs. (Swappable for a WebSocket without touching callers.)
+ *
+ * The server numbers every message for this device. They arrive over a server-sent
+ * event stream (fast) and over short polling (always works): a stream can stall
+ * silently behind a proxy, as seen through a Cloudflare tunnel, where headers or
+ * later events simply never arrive. Messages are handled once each, strictly in
+ * number order, whichever path brings them first.
  */
 export class SignalingClient {
   private closed = false;
   private terminal = false;
   private ctrl: AbortController | null = null;
   private queue: Promise<void> = Promise.resolve();
+  /** Highest message number handled; anything at or below it is a duplicate. */
+  private lastSeq = 0;
+  /** Messages that arrived ahead of a gap, waiting for the missing number. */
+  private held = new Map<number, { event: string; payload: Record<string, unknown> }>();
+  private ready = false;
+  private streamUp = false;
+  private pollUp = false;
+  /** Messages that never reached the server (diagnostics). */
+  failedPosts = 0;
+  /** How many messages came in over each path first (diagnostics). */
+  via = { stream: 0, poll: 0 };
+  /** Poll quickly while connecting; slowed once the peer link is up. */
+  pollMs = 1000;
 
   constructor(
     private roomId: string,
@@ -29,7 +51,13 @@ export class SignalingClient {
   ) {}
 
   connect() {
-    void this.loop();
+    void this.streamLoop();
+    void this.pollLoop();
+  }
+
+  /** "stream", "poll" or "stream+poll": which paths are working right now (diagnostics). */
+  get mode(): string {
+    return [this.streamUp && "stream", this.pollUp && "poll"].filter(Boolean).join("+") || "none";
   }
 
   /** Messages are POSTed strictly in order so offer → candidates never reorder. */
@@ -73,23 +101,87 @@ export class SignalingClient {
           this.expire();
           return;
         }
-        if (res.status !== 429 && res.status < 500) return;
+        if (res.status !== 429 && res.status < 500) {
+          this.failedPosts++;
+          return;
+        }
       } catch {
         /* network blip: retry */
       }
       await sleep(400 * (attempt + 1));
     }
+    if (!this.closed) this.failedPosts++;
   }
 
   private expire() {
     if (this.terminal) return;
     this.terminal = true;
+    this.ctrl?.abort();
     this.h.onExpired();
   }
 
-  private async loop() {
+  private live() {
+    return !this.closed && !this.terminal;
+  }
+
+  private setUp(path: "stream" | "poll", up: boolean) {
+    const wasUp = this.streamUp || this.pollUp;
+    if (path === "stream") this.streamUp = up;
+    else this.pollUp = up;
+    const isUp = this.streamUp || this.pollUp;
+    if (isUp && !wasUp) this.h.onStream("open");
+    if (!isUp && wasUp && this.live()) this.h.onStream("reconnecting");
+  }
+
+  /** Either path saying hello means signaling works. */
+  private markReady(peer: string | null) {
+    if (this.ready) return;
+    this.ready = true;
+    this.h.onReady(peer);
+  }
+
+  /* ----------------------------------------------------------------- poll */
+
+  private async pollLoop() {
+    let failures = 0;
+    while (this.live()) {
+      try {
+        const res = await fetch(`/api/session/${this.roomId}/poll`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${this.token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ after: this.lastSeq }),
+          cache: "no-store",
+        });
+        if (res.status === 401 || res.status === 404 || res.status === 410) return this.expire();
+        if (!res.ok) throw new Error(String(res.status));
+        const { events } = (await res.json()) as {
+          events: Array<{ seq: number; event: string; data: Record<string, unknown> }>;
+        };
+        failures = 0;
+        this.setUp("poll", true);
+        this.markReady(null);
+        // The server's log is authoritative: a number it no longer has (trimmed) is not worth waiting for.
+        if (events.length && events[0].seq > this.lastSeq + 1 && !this.held.has(this.lastSeq + 1)) {
+          this.lastSeq = events[0].seq - 1;
+        }
+        for (const e of events) this.accept(e.seq, e.event, e.data ?? {}, "poll");
+      } catch {
+        if (!this.live()) return;
+        this.setUp("poll", false);
+        if (++failures > MAX_POLL_FAILURES && !this.streamUp) {
+          this.h.onStream("lost");
+          return;
+        }
+      }
+      await sleep(this.pollMs);
+    }
+  }
+
+  /* --------------------------------------------------------------- stream */
+
+  private async streamLoop() {
     let attempt = 0;
-    while (!this.closed && !this.terminal) {
+    while (this.live()) {
       try {
         this.ctrl = new AbortController();
         const res = await fetch(`/api/session/${this.roomId}/events`, {
@@ -100,18 +192,13 @@ export class SignalingClient {
         if (res.status === 401 || res.status === 404) return this.expire();
         if (!res.ok || !res.body) throw new Error("stream");
         attempt = 0;
-        this.h.onStream("open");
         await this.read(res.body);
       } catch {
-        if (this.closed) return;
+        /* polling carries on regardless */
       }
-      if (this.closed || this.terminal) return;
-      if (++attempt > 8) {
-        this.h.onStream("lost");
-        return;
-      }
-      this.h.onStream("reconnecting");
-      await sleep(Math.min(5000, 600 * attempt));
+      this.setUp("stream", false);
+      if (!this.live()) return;
+      await sleep(Math.min(10_000, 600 * ++attempt));
     }
   }
 
@@ -134,9 +221,11 @@ export class SignalingClient {
   private dispatch(block: string) {
     let event = "message";
     let data = "";
+    let seq = 0;
     for (const line of block.split("\n")) {
       if (line.startsWith("event:")) event = line.slice(6).trim();
       else if (line.startsWith("data:")) data += line.slice(5).trim();
+      else if (line.startsWith("id:")) seq = Number(line.slice(3).trim()) || 0;
     }
     if (!data) return;
     let payload: Record<string, unknown>;
@@ -145,10 +234,31 @@ export class SignalingClient {
     } catch {
       return;
     }
+    if (event === "ready") {
+      this.setUp("stream", true);
+      this.markReady((payload.peer as string | null) ?? null);
+      return;
+    }
+    if (seq) this.accept(seq, event, payload, "stream");
+    else this.handle(event, payload); // "expired" / "closed" on room teardown
+  }
+
+  /* ------------------------------------------------------------ ordering */
+
+  /** Handle each numbered message exactly once, in order, whichever path delivered it. */
+  private accept(seq: number, event: string, payload: Record<string, unknown>, path: "stream" | "poll") {
+    if (seq <= this.lastSeq || this.held.has(seq)) return;
+    this.via[path]++;
+    this.held.set(seq, { event, payload });
+    for (let next = this.held.get(this.lastSeq + 1); next; next = this.held.get(this.lastSeq + 1)) {
+      this.held.delete(++this.lastSeq);
+      this.handle(next.event, next.payload);
+      if (!this.live()) return;
+    }
+  }
+
+  private handle(event: string, payload: Record<string, unknown>) {
     switch (event) {
-      case "ready":
-        this.h.onReady((payload.peer as string | null) ?? null);
-        break;
       case "peer-joined":
         this.h.onPeerJoined(String(payload.label ?? "Device"));
         break;

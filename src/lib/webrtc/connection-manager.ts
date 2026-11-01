@@ -7,10 +7,10 @@ import { BenchResponder, BenchRunner, type BenchResult } from "../benchmarks/syn
 import { EMPTY_PATH, jsHeapBytes, samplePath, startLagMonitor, type PathStats } from "../diagnostics/stats";
 import { createWorkerHasher } from "./checksum";
 import { DEFAULT_TUNING, resolveTuning, type Tuning } from "./tuning";
-import type { Action, ErrorCode, Summary } from "./connection-state";
+import type { Action, ConnectHint, ErrorCode, Summary } from "./connection-state";
 import { DataChannelLink } from "./data-channel";
 import { loadIceConfig, type IceConfig, type RouteInfo } from "./ice";
-import { PeerConnectionManager, type PcState } from "./peer-connection";
+import { PeerConnectionManager, type CandidateTally, type PcState } from "./peer-connection";
 import { PROTOCOL_VERSION, isBenchFrame } from "./protocol";
 import { SignalingClient } from "./signaling-client";
 import { TransferReceiver, TransferSender, type Manifest, type Progress } from "./transfer-manager";
@@ -51,6 +51,8 @@ export interface DiagSnapshot {
 }
 
 const CONNECT_TIMEOUT_MS = 25_000;
+/** The receiver also waits out a phone asking its user for the one-tap local-network unlock. */
+const RECEIVER_CONNECT_TIMEOUT_MS = 45_000;
 const LOSS_WINDOW_MS = 30_000;
 const EMIT_MS = 125;
 const POST_COMPLETE_MS = 5 * 60_000;
@@ -93,6 +95,14 @@ export class TransferSession {
   private lag: ReturnType<typeof startLagMonitor> | null = null;
   private lastBench: BenchResult | null = null;
   private statsBusy = false;
+  /** Held only while connecting: Safari shares its local address only with pages that have microphone access. */
+  private lanStream: MediaStream | null = null;
+  private lanTried = false;
+  /** Between "no local address" and the retry that follows the tap. */
+  private lanWaiting = false;
+  /** What actually arrived over signaling, for the failure details: "no answer" and "answer but no ICE" differ. */
+  private sigIn: Record<string, number> = {};
+  private sigReady = 0;
 
   private meter = new RollingMeter();
   private latest: Progress | null = null;
@@ -283,6 +293,7 @@ export class TransferSession {
     this.lag?.stop();
     this.sender?.detach();
     this.receiver?.detach();
+    this.releaseLan();
     this.peer?.close();
     this.signaling?.leave();
   }
@@ -381,12 +392,14 @@ export class TransferSession {
       onChannel: (ch) => this.bindChannel(ch),
       onState: (s) => this.onPcState(s),
       onRoute: (r) => this.onRoute(r),
+      onGathered: (t) => this.onGathered(t),
     });
   }
 
   private signalingHandlers() {
     return {
       onReady: () => {
+        this.sigReady++;
         this.streamLost = false;
       },
       onPeerJoined: (label: string) => {
@@ -400,8 +413,12 @@ export class TransferSession {
         this.ev.dispatch({ type: "FAILED", code: "peer-left" });
         this.shutdownSoon();
       },
-      onSignal: (kind: Parameters<PeerConnectionManager["handleSignal"]>[0], data: unknown) =>
-        void this.peer?.handleSignal(kind, data),
+      onSignal: (kind: Parameters<PeerConnectionManager["handleSignal"]>[0], data: unknown) => {
+        // A fresh offer is a fresh attempt (e.g. the phone just unlocked its local address): give it full time.
+        this.sigIn[kind] = (this.sigIn[kind] ?? 0) + 1;
+        if (kind === "offer" && this.role === "receiver" && !this.everOpened && !this.finished) this.armConnectTimeout();
+        void this.peer?.handleSignal(kind, data);
+      },
       onExpired: () => {
         if (this.finished) return;
         // A healthy peer-to-peer channel doesn't need the signaling room any more.
@@ -422,6 +439,7 @@ export class TransferSession {
   private bindChannel(ch: RTCDataChannel) {
     const open = () => {
       if (this.disposed || this.finished) return;
+      this.releaseLan(); // connected: the microphone was only needed to be found
       this.channel = ch;
       this.link = new DataChannelLink(ch, {
         onControl: (msg) => {
@@ -457,6 +475,7 @@ export class TransferSession {
       if (wasReconnect) this.reconnects++;
       this.clearLoss();
       if (this.connectTimer) clearTimeout(this.connectTimer);
+      if (this.signaling) this.signaling.pollMs = 3000; // only bye / peer-left matter now
       this.ev.dispatch({ type: "CONNECTED", label: this.peerLabel, route: this.route?.route ?? null });
       this.sender?.attach(this.link);
       this.receiver?.attach(this.link);
@@ -469,7 +488,9 @@ export class TransferSession {
     if (this.finished) return;
     if (s === "failed") {
       if (!this.everOpened) {
-        this.ev.dispatch({ type: "FAILED", code: "connection-failed", detail: "ice-failed" });
+        // The phone may be about to retry with its local address unlocked: let the connect timer decide.
+        if (this.role === "receiver" || this.lanWaiting) return;
+        this.failConnect("ice-failed");
         this.shutdownSoon();
         return;
       }
@@ -545,9 +566,82 @@ export class TransferSession {
     this.connectTimer = setTimeout(() => {
       if (this.everOpened || this.finished) return;
       this.finished = true;
-      this.ev.dispatch({ type: "FAILED", code: "connection-failed", detail: "timeout" });
+      this.failConnect("timeout");
       this.shutdownSoon();
-    }, CONNECT_TIMEOUT_MS);
+    }, this.role === "receiver" ? RECEIVER_CONNECT_TIMEOUT_MS : CONNECT_TIMEOUT_MS);
+  }
+
+  /**
+   * Safari (iOS especially) hides its LAN address from WebRTC unless the page has microphone
+   * access, so two devices on one Wi-Fi can't find each other. If gathering ended without a host
+   * candidate, unlock it: silently when permission is already granted (e.g. after Nearby),
+   * otherwise ask with one tap. The microphone is never read and is released once connected.
+   */
+  private onGathered(t: CandidateTally) {
+    if (t.host || this.role !== "sender" || !this.device.webkit || this.lanTried || this.everOpened || this.finished) return;
+    if (!navigator.mediaDevices?.getUserMedia) return;
+    this.lanTried = true;
+    this.lanWaiting = true;
+    void micGranted().then((granted) => {
+      if (this.finished || this.everOpened) return;
+      if (granted) return void this.unlockLan();
+      if (this.connectTimer) clearTimeout(this.connectTimer); // wait for the tap
+      this.connectTimer = null;
+      this.ev.dispatch({ type: "LAN_PROMPT", show: true });
+    });
+  }
+
+  /** From the "Allow" tap (user activation), or automatically when permission is already granted. */
+  async unlockLan() {
+    if (this.finished || this.everOpened || !this.peer) return;
+    this.ev.dispatch({ type: "LAN_PROMPT", show: false });
+    this.lanWaiting = false;
+    try {
+      this.lanStream ??= await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch {
+      this.finished = true;
+      this.failConnect("microphone-declined");
+      this.shutdownSoon();
+      return;
+    }
+    if (this.finished) return this.releaseLan();
+    this.armConnectTimeout();
+    void this.peer.start(); // new generation: re-gathers, now with host candidates
+  }
+
+  private releaseLan() {
+    this.lanStream?.getTracks().forEach((t) => t.stop());
+    this.lanStream = null;
+  }
+
+  /**
+   * The direct path never opened. Say which side is the problem, from the candidates each offered:
+   * no "host" candidate means that browser hides its LAN address (Brave, privacy extensions), so two
+   * devices on one Wi-Fi can only meet through the router, which most routers don't allow.
+   */
+  private failConnect(reason: string) {
+    const c = this.peer?.candidates() ?? { local: {}, remote: {} };
+    const fmt = (t: Record<string, number>) =>
+      Object.entries(t)
+        .map(([k, v]) => `${k} ${v}`)
+        .join(", ") || "none";
+    const replied = this.sigIn[this.role === "sender" ? "answer" : "offer"];
+    const hint: ConnectHint = !replied
+      ? "no-reply"
+      : !c.local.host
+        ? "local-hidden"
+        : !c.remote.host
+          ? "remote-hidden"
+          : "network";
+    this.ev.dispatch({
+      type: "FAILED",
+      code: "connection-failed",
+      detail:
+        `${reason} · this device: ${fmt(c.local)} · other device: ${fmt(c.remote)}` +
+        ` · signals in: ${fmt(this.sigIn)} (stream ${this.signaling?.via.stream ?? 0}, poll ${this.signaling?.via.poll ?? 0})` +
+        ` · paths ${this.signaling?.mode ?? "none"}, ready ${this.sigReady} · posts failed: ${this.signaling?.failedPosts ?? 0}`,
+      hint,
+    });
   }
 
   private clearTimers() {
@@ -658,4 +752,12 @@ function summarize(files: Array<{ name: string; size: number }>, total?: number)
     totalBytes: total ?? files.reduce((n, f) => n + f.size, 0),
     names: files.slice(0, 5).map((f) => f.name),
   };
+}
+
+async function micGranted(): Promise<boolean> {
+  try {
+    return (await navigator.permissions.query({ name: "microphone" as PermissionName })).state === "granted";
+  } catch {
+    return false;
+  }
 }

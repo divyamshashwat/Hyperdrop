@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { toSelected } from "@/lib/files/file-utils";
 import { FolderSink, type FsDir, type ReceivedFile } from "@/lib/files/sink";
-import { NearbyBroadcaster, type BroadcastState } from "@/lib/proximity/ultrasonic-encoder";
+import { NearbyBroadcaster, type BroadcastState } from "@/lib/proximity/encoder";
 import { parseJoinHash, normalizeCode } from "@/lib/session/room";
 import { supportsRequiredApis } from "@/lib/session/device";
 import { EMPTY_METRICS, type MetricsSnapshot } from "@/lib/transfer/metrics";
@@ -209,6 +209,8 @@ export function useTransfer({ roomId }: Options = {}) {
       },
       decline: () => session.current?.reject(),
       cancel: () => session.current?.cancel(),
+      /** Safari hides its local address without microphone access: unlock it (must run from the tap). */
+      allowLan: () => void session.current?.unlockLan(),
       resume: () => session.current?.resume(),
       backToFiles: () => dispatch({ type: "BACK_TO_FILES" }),
       reset: () => {

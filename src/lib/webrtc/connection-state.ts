@@ -27,6 +27,14 @@ export type Phase =
 export type Role = "sender" | "receiver" | null;
 export type Route = "direct" | "relayed" | null;
 
+/**
+ * Why a direct connection couldn't form, judged from the candidates each side offered:
+ * this browser hid its local address, the other one did, or both offered one and the
+ * network still kept them apart (client isolation, firewall, different networks), or the
+ * other device's reply (offer/answer) never arrived over signaling at all.
+ */
+export type ConnectHint = "local-hidden" | "remote-hidden" | "network" | "no-reply";
+
 export type ErrorCode =
   | "connection-failed"
   | "interrupted"
@@ -66,13 +74,15 @@ export interface Machine {
   peerLabel: string | null;
   route: Route;
   summary: Summary | null;
-  error: { code: ErrorCode; detail?: string } | null;
+  error: { code: ErrorCode; detail?: string; hint?: ConnectHint } | null;
   /** Phase to return to when a reconnect succeeds. */
   resumePhase: "sending" | "receiving" | "awaiting-acceptance" | "connected" | null;
   /** Percent resumed from, shown once after a successful resume. */
   resumedFrom: number | null;
   /** Set when a sender has clicked through a QR link, so Reset can return to it. */
   linked: boolean;
+  /** Safari is hiding this device's local address; one tap on the microphone prompt unlocks the direct path. */
+  lanPrompt: boolean;
 }
 
 export const INITIAL: Machine = {
@@ -87,6 +97,7 @@ export const INITIAL: Machine = {
   resumePhase: null,
   resumedFrom: null,
   linked: false,
+  lanPrompt: false,
 };
 
 export type Action =
@@ -110,7 +121,8 @@ export type Action =
   | { type: "RECONNECTING" }
   | { type: "PAUSED" }
   | { type: "RESUMED" }
-  | { type: "FAILED"; code: ErrorCode; detail?: string }
+  | { type: "FAILED"; code: ErrorCode; detail?: string; hint?: ConnectHint }
+  | { type: "LAN_PROMPT"; show: boolean }
   | { type: "EXPIRED" }
   | { type: "CANCELLED"; byPeer?: boolean }
   | { type: "BACK_TO_FILES" }
@@ -180,7 +192,7 @@ export function reduce(m: Machine, a: Action): Machine {
       return m.phase === "idle" ? m : { ...m, route: a.route };
     case "CONNECTED": {
       const wasLive = m.resumePhase;
-      const base = { ...m, peerLabel: a.label ?? m.peerLabel, route: a.route, error: null };
+      const base = { ...m, peerLabel: a.label ?? m.peerLabel, route: a.route, error: null, lanPrompt: false };
       if (m.phase === "reconnecting" || m.phase === "paused") {
         return { ...base, phase: wasLive ?? "connected", resumePhase: null };
       }
@@ -211,7 +223,9 @@ export function reduce(m: Machine, a: Action): Machine {
     case "RESUMED":
       return { ...m, phase: "reconnecting", error: null };
     case "FAILED":
-      return { ...m, phase: "failed", error: { code: a.code, detail: a.detail } };
+      return { ...m, phase: "failed", error: { code: a.code, detail: a.detail, hint: a.hint }, lanPrompt: false };
+    case "LAN_PROMPT":
+      return { ...m, lanPrompt: a.show };
     case "EXPIRED":
       if (m.phase === "completed" || m.phase === "idle") return m;
       return { ...m, phase: "expired", error: { code: "session-expired" } };
