@@ -39,7 +39,13 @@ export const DEFAULT_AMPLITUDE = 0.18;
  * Every listener decodes them alongside the shipping profile, so a computer opened with
  * `?nearbyProfile=<id>` can A/B one on real hardware without the phone changing anything.
  */
-export const CANDIDATE_PROFILES: readonly FrequencyProfile[] = [];
+export const CANDIDATE_PROFILES: readonly FrequencyProfile[] = [
+  // Sweep winners with people talking: speech has little energy up here ("s" aside), so they keep
+  // pairing with speech ~18 dB louder than the chirp, where 2.4-4.2 kHz drops to near zero.
+  // 40 ms symbols: same reliability as 50-70 ms in the sweep, 2.7 s packets.
+  { id: "hi-5.5", tones: [5500, 6300, 7100, 7900], minSampleRate: 22050, symbolMs: 40 },
+  { id: "mid-4.0", tones: [4000, 4800, 5600, 6400], minSampleRate: 16000, symbolMs: 40 },
+];
 
 const fits = (p: FrequencyProfile, sampleRate: number) => sampleRate >= p.minSampleRate && p.tones[TONES - 1] < (sampleRate / 2) * 0.97;
 

@@ -52,6 +52,35 @@ The transmitter picks from the output rate it actually got (`AudioContext.sample
 every profile its real capture rate can represent. Default level 0.18 (audible, so kept modest). Override with `?nearbyLevel=0.1` to find the
 lowest level that still works.
 
+### 3a. Simulated sweep with people talking (2026-11)
+
+`npm run sweep:nearby` runs tone set × symbol length × speech level × talker (close talker, café babble) × distance
+through the real decoder, in parallel on every core. Full tables and method: [NEARBY-sweep.md](./NEARBY-sweep.md).
+
+Worst-case chance of pairing within one 15 s broadcast, averaged over speech levels from −6 to +18 dB vs the chirp:
+
+| Tones @ symbol | 30 cm | 1 m | 2 m | per-packet decode at 30 cm, speech +18 dB |
+| --- | --- | --- | --- | --- |
+| 5.5–7.9 kHz @ 40 ms (`hi-5.5`) | 100% | 100% | 69% | 90% |
+| 4.0–6.4 kHz @ 40 ms (`mid-4.0`) | 97% | 97% | 64% | 40% |
+| 3.0–5.1 kHz @ 50 ms | 91% | 85% | 56% | 23% |
+| **2.4–4.2 kHz @ 50 ms (shipping)** | 80% | 79% | 33% | 3% |
+| 1.9–3.7 kHz @ 50 ms | 72% | 66% | 14% | 0% |
+
+What it says:
+- **Speech is the problem below ~4 kHz.** Above it speech has little energy ("s" aside), so the higher sets keep
+  pairing with speech 18 dB louder than the chirp, where the shipping set stops.
+- **At 2 m, room echo is the limit, not speech.** Every set falls to ~30–55% per packet even with speech quieter than
+  the chirp; longer symbols help a little. Nearby is a 30 cm–1 m feature.
+- **Symbol length matters less than tone height.** 40 ms matches 50–70 ms here with a 2.7 s packet instead of 3.4–4.6 s.
+- **No false packets** in 96 minutes of loud speech alone, in any configuration, and no spurious preamble locks.
+
+**A/B on hardware.** `hi-5.5` and `mid-4.0` are `CANDIDATE_PROFILES`: every phone decodes them alongside the shipping
+profile, so only the computer changes. Open it with `?nearbyProfile=hi-5.5` (or `mid-4.0`), tap Start Nearby, and
+pair from the phone as usual, with someone talking nearby. If a candidate pairs reliably on your speakers, make it
+the shipping profile. The sweep can't model laptop speakers that roll off above 6–8 kHz, which is the risk for
+`hi-5.5`; `mid-4.0` is the safer bet.
+
 ## 4. Calibration and compatibility matrix (fill this in)
 
 Page: `/proximity-test` (not linked, noindex). Over **HTTPS** (the microphone needs a secure page).
@@ -61,9 +90,9 @@ Page: `/proximity-test` (not linked, noindex). Over **HTTPS** (the microphone ne
 3. Then **Emit test packet ×3** and check the phone decodes it (corrections and latency are shown).
 4. Repeat at 30 cm, 1 m, 2 m; quiet room, office, TV/music.
 
-| Phone | iOS / browser | ctx Hz | mic Hz | 2.4 | 3.0 | 3.6 | 4.2 | packet @ 0.1 | notes |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| | | | | | | | | | |
+| Phone | iOS / browser | ctx Hz | mic Hz | 2.4 | 3.0 | 3.6 | 4.2 | packet @ 0.1 | `mid-4.0` w/ talking | `hi-5.5` w/ talking | notes |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| | | | | | | | | | | | |
 
 Earlier ultrasonic row (iPhone, iOS 18.5 Safari, Windows PC speaker): 20.0-21.0 kHz detected as single tones, but
 packets never paired.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ToneDecoder, type DecoderEvent } from "@/lib/proximity/decoder";
-import { GAP_MS, PROFILES, chooseOutputProfile, profilesForCapture, renderSymbols, symbolSamples } from "@/lib/proximity/modulation";
+import { CANDIDATE_PROFILES, GAP_MS, PROFILES, chooseOutputProfile, profilesForCapture, renderSymbols, symbolSamples } from "@/lib/proximity/modulation";
 import {
   DATA_SYMBOLS,
   PACKET_SYMBOLS,
@@ -103,8 +103,8 @@ describe("frequency profiles", () => {
     expect(chooseOutputProfile(44100)?.id).toBe("audible");
     expect(chooseOutputProfile(16000)?.id).toBe("audible");
     expect(chooseOutputProfile(8000)).toBeNull();
-    expect(profilesForCapture(44100).map((p) => p.id)).toEqual(["audible"]);
-    expect(profilesForCapture(16000).map((p) => p.id)).toEqual(["audible"]);
+    expect(profilesForCapture(44100).map((p) => p.id)).toEqual(["audible", "hi-5.5", "mid-4.0"]);
+    expect(profilesForCapture(16000).map((p) => p.id)).toEqual(["audible", "mid-4.0"]); // 7.9 kHz needs more than 16 kHz
     expect(profilesForCapture(8000)).toEqual([]);
   });
 
@@ -127,6 +127,35 @@ describe("frequency profiles", () => {
     expect(seconds).toBeLessThan(3.5);
     expect(seconds).toBeGreaterThan(1);
   });
+});
+
+describe("calibration candidates", () => {
+  it("have unique ids, no carrier at a harmonic of another, and fit their sample rate", () => {
+    const all = [...PROFILES, ...CANDIDATE_PROFILES];
+    expect(new Set(all.map((p) => p.id)).size).toBe(all.length);
+    for (const p of CANDIDATE_PROFILES) {
+      for (const a of p.tones) for (const b of p.tones) if (b > a) expect(b % a).not.toBe(0);
+      expect(p.tones[3]).toBeLessThan((p.minSampleRate / 2) * 0.97);
+    }
+  });
+
+  it("are chosen only when asked for, and fall back to the shipping profile otherwise", () => {
+    expect(chooseOutputProfile(48000, "hi-5.5")?.id).toBe("hi-5.5");
+    expect(chooseOutputProfile(48000, "nope")?.id).toBe("audible");
+    expect(chooseOutputProfile(16000, "hi-5.5")?.id).toBe("audible"); // 7.9 kHz doesn't fit at 16 kHz
+    expect(profilesForCapture(48000).map((p) => p.id)).toEqual(["audible", "hi-5.5", "mid-4.0"]);
+  });
+
+  for (const profile of CANDIDATE_PROFILES) {
+    for (const rate of [48000, 44100]) {
+      it(`${profile.id} decodes at ${rate} Hz through noise, delay and attenuation`, () => {
+        const pcm = renderSymbols(encodePacket(PAYLOAD), profile, rate, 0.25);
+        const x = airPath(pcm, rate, { gain: 0.15, noise: 0.01, leadMs: 123 });
+        const packet = run(new ToneDecoder(profile, rate), x).find((e) => e.type === "packet");
+        expect(packet && packet.type === "packet" && packet.packet.payload.token).toBe(PAYLOAD.token);
+      });
+    }
+  }
 });
 
 describe("streaming decoder", () => {
@@ -187,7 +216,7 @@ describe("streaming decoder", () => {
         (t < 4 ? 0.08 * (Math.sin(2 * Math.PI * 2640 * t) + Math.sin(2 * Math.PI * 3300 * t) + Math.sin(2 * Math.PI * 3960 * t)) : 0) + // a held chord
         (t > 6 && t < 9 ? 0.15 * Math.sin(2 * Math.PI * 3000 * t) : 0); // a steady 3 kHz beep
     }
-    for (const profile of PROFILES) {
+    for (const profile of [...PROFILES, ...CANDIDATE_PROFILES]) {
       const events = run(new ToneDecoder(profile, rate), x);
       expect(events.filter((e) => e.type === "packet")).toHaveLength(0);
     }

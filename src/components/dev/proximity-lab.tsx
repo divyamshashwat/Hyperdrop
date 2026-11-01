@@ -79,7 +79,7 @@ function Emit() {
 
   const packet = () => {
     const c = ensure();
-    const profile = chooseOutputProfile(c.sampleRate);
+    const profile = chooseOutputProfile(c.sampleRate, new URLSearchParams(location.search).get("nearbyProfile"));
     if (!profile) return setPlaying(`no profile at ${c.sampleRate} Hz`);
     const r = new Uint32Array(1);
     crypto.getRandomValues(r);
