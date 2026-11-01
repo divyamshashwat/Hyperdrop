@@ -64,14 +64,14 @@ Worst-case chance of pairing within one 15 s broadcast, averaged over speech lev
 | 5.5–7.9 kHz @ 40 ms (`hi-5.5`) | 100% | 100% | 69% | 90% |
 | 4.0–6.4 kHz @ 40 ms (`mid-4.0`) | 97% | 97% | 64% | 40% |
 | 3.0–5.1 kHz @ 50 ms | 91% | 85% | 56% | 23% |
-| **2.4–4.2 kHz @ 50 ms (shipping)** | 80% | 79% | 33% | 3% |
-| 1.9–3.7 kHz @ 50 ms | 72% | 66% | 14% | 0% |
+| **2.4–4.2 kHz @ 50 ms (shipping)** | 81% | 81% | 51% | 3% |
+| 1.9–3.7 kHz @ 50 ms | 76% | 68% | 49% | 0% |
 
 What it says:
 - **Speech is the problem below ~4 kHz.** Above it speech has little energy ("s" aside), so the higher sets keep
   pairing with speech 18 dB louder than the chirp, where the shipping set stops.
-- **At 2 m, room echo is the limit, not speech.** Every set falls to ~30–55% per packet even with speech quieter than
-  the chirp; longer symbols help a little. Nearby is a 30 cm–1 m feature.
+- **At 2 m, room echo is the limit, not speech.** Every set decodes only ~15–55% of packets even with speech quieter
+  than the chirp (worst talker kind); 70 ms symbols do best there. Nearby is a 30 cm–1 m feature.
 - **Symbol length matters less than tone height.** 40 ms matches 50–70 ms here with a 2.7 s packet instead of 3.4–4.6 s.
 - **No false packets** in 96 minutes of loud speech alone, in any configuration, and no spurious preamble locks.
 
